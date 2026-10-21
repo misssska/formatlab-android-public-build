@@ -1,108 +1,96 @@
-name: FormatLab Android - public debug APK
+name: FormatLab Android v0.3 offline debug APK
 
 on:
   push:
     branches: [main]
     paths:
-      - 'FormatLab-Android-public-v0.2.1-ellenorzott.zip'
-      - '.github/workflows/build-public-android.yml'
+      - 'FormatLab-Android-v0.3-offline-source.zip'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: formatlab-android-public-${{ github.ref }}
+  group: formatlab-v03-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  android-debug:
+  offline-apk:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
-      - name: Checkout public build repository
+      - name: Checkout public source
         uses: actions/checkout@v4
 
-      - name: Verify trusted source archive before extraction
+      - name: Verify SHA-256 and safe archive structure
         shell: bash
         run: |
           set -euo pipefail
-          test -f FormatLab-Android-public-v0.2.1-ellenorzott.zip
-          echo 'a1b72d9b8c8331e5c77c2b04330c77786596fd73c81064649b9b9c4d07e058ed  FormatLab-Android-public-v0.2.1-ellenorzott.zip' | sha256sum -c -
+          echo '04694a0afbc26ebcbe7dd0c4c265d656acc05497d6d5765980c22e4366c0123b  FormatLab-Android-v0.3-offline-source.zip' | sha256sum -c -
           python3 - <<'PY'
           from pathlib import Path
           import zipfile
-          archive = Path('FormatLab-Android-public-v0.2.1-ellenorzott.zip')
-          with zipfile.ZipFile(archive) as z:
-              entries = z.infolist()
-              assert len(entries) == 62, len(entries)
-              assert all(e.filename.startswith('FormatLab-Android-v0.2/') and '..' not in e.filename.split('/') for e in entries)
-              assert all(((e.external_attr >> 16) & 0o170000) != 0o120000 for e in entries)
-              assert sum(e.file_size for e in entries) < 2_000_000
+          f=Path('FormatLab-Android-v0.3-offline-source.zip')
+          with zipfile.ZipFile(f) as z:
+              entries=z.infolist()
+              assert len(entries)==69, len(entries)
+              assert sum(x.file_size for x in entries)<1_000_000
+              assert all(x.filename.startswith('FormatLab-Android-v0.3/') and '..' not in x.filename.split('/') for x in entries)
+              assert all(((x.external_attr >> 16)&0o170000)!=0o120000 for x in entries)
               assert z.testzip() is None
-          print('ARCHIVE_VALIDATED')
+          print('ARCHIVE_AUDIT_PASS')
           PY
+          unzip -q FormatLab-Android-v0.3-offline-source.zip
 
-      - name: Extract vetted Android project
-        shell: bash
-        run: |
-          set -euo pipefail
-          unzip -q FormatLab-Android-public-v0.2.1-ellenorzott.zip
-          test -f FormatLab-Android-v0.2/app/src/main/AndroidManifest.xml
-          test -f FormatLab-Android-v0.2/scripts/audit_public_source.py
-
-      - name: Prepare Java 17
+      - name: Install JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK commandline tools
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
       - name: Install Android 35 platform and build tools
         shell: bash
-        run: |
-          set -euo pipefail
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-          test -f "${ANDROID_HOME}/platforms/android-35/android.jar"
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
 
-
-      - name: Install Gradle 8.10.2
+      - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
-      - name: Verify offline configuration and native JS bridge
-        working-directory: FormatLab-Android-v0.2
+      - name: Test offline permissions, JS formats, native bridge and source audit
+        working-directory: FormatLab-Android-v0.3
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/audit_public_source.py
           python3 scripts/verify_android.py
+          python3 scripts/test_offline_surface.py
           node scripts/test_js_bridge.js
+          node scripts/test_offline_algorithms.js
 
-      - name: Assemble debug APK
-        working-directory: FormatLab-Android-v0.2
+      - name: Build offline Android v0.3 debug APK
+        working-directory: FormatLab-Android-v0.3
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Confirm APK generated
-        run: test -s FormatLab-Android-v0.2/app/build/outputs/apk/debug/app-debug.apk
+      - name: Confirm nonempty APK file
+        run: test -s FormatLab-Android-v0.3/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Publish test APK on GitHub Releases (avoids Actions artifact storage)
+      - name: Publish debug APK as public GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          APK='FormatLab-Android-v0.2/app/build/outputs/apk/debug/app-debug.apk'
-          test -s "$APK"
-          TAG="formatlab-debug-v0.2.1-run-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" "$APK#FormatLab-Android-v0.2.1-debug.apk" \
+          APK='FormatLab-Android-v0.3/app/build/outputs/apk/debug/app-debug.apk'
+          TAG="formatlab-v0.3.0-debug-run-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" "$APK#FormatLab-Android-v0.3-debug.apk" \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
-            --title "FormatLab Android v0.2.1 — test APK (run #${GITHUB_RUN_NUMBER})" \
-            --notes "Automated test build from SHA-256 verified public source. Debug APK only, not a Play Store release; install at your own risk and test on a real device." \
+            --title "FormatLab Android v0.3.0 offline — debug test" \
+            --notes "Offline-only debug build. APK uses native Android PDF/Word/AAC features with restricted fidelity. Source SHA-256 verified. Real handset tests required." \
             --prerelease
