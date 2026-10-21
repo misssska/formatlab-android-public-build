@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: formatlab-android-public-${{ github.ref }}
@@ -83,10 +83,18 @@ jobs:
       - name: Confirm APK generated
         run: test -s FormatLab-Android-v0.2/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Upload debug APK (1 day)
-        uses: actions/upload-artifact@v4
-        with:
-          name: FormatLab-Android-v0.2.1-debug-APK
-          path: FormatLab-Android-v0.2/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 1
+      - name: Publish test APK on GitHub Releases (avoids Actions artifact storage)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='FormatLab-Android-v0.2/app/build/outputs/apk/debug/app-debug.apk'
+          test -s "$APK"
+          TAG="formatlab-debug-v0.2.1-run-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" "$APK#FormatLab-Android-v0.2.1-debug.apk" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "FormatLab Android v0.2.1 — test APK (run #${GITHUB_RUN_NUMBER})" \
+            --notes "Automated test build from SHA-256 verified public source. Debug APK only, not a Play Store release; install at your own risk and test on a real device." \
+            --prerelease
