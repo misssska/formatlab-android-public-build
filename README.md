@@ -1,5 +1,14 @@
 # FormatLab Android — offline builds
 
+## v0.3 APK elkészült (2026-10-21)
+
+- [v0.3 sikeres GitHub Actions build #39605632109](https://github.com/misssska/formatlab-android-public-build/actions/runs/39605632109) — **SUCCESS**, valamennyi lépés PASS.
+- [v0.3 GitHub Release](https://github.com/misssska/formatlab-android-public-build/releases/tag/formatlab-v0.3.0-debug-run-4) — `app-debug.apk` (306017 bájt).
+- Forrás SHA-256: `04694a0afbc26ebcbe7dd0c4c265d656acc05497d6d5765980c22e4366c0123b`.
+- A debug APK ugyanazt az application ID-t használja, mint a korábbi v0.2.1: `hu.formatlab.android`. A GitHubon külön, múló buildkörnyezetben generált debug aláírás miatt a korábbi verzióra telepítés aláírásütközésbe futhat. Ilyenkor a régi verzió eltávolítása szükséges lehet, **előtte a fontos fájlokat mentsd ki**. A korábban külső tárhelyre mentett fájlokat az app törlése nem szokta eltávolítani, de az app belső adatainak megőrzése nem garantált.
+- A sikeres fordítás nem bizonyítja a v0.3 valamennyi funkciójának tényleges készülékes működését. Először APK-indítás, korábbi funkciók regressziója, majd PDF/DOCX/SVG tesztek szükségesek.
+
+
 ## Jelenlegi mérföldkő
 
 - **v0.2.1:** lefordított és telefonon igazolt debug APK (képkonvertálás, ZIP, fájlmentés, e-mail-megosztás, CSV→JSON). [Bizonyítottan működő v0.2.1 APK](https://github.com/misssska/formatlab-android-public-build/releases/tag/formatlab-debug-v0.2.1-run-3)
