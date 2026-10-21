@@ -1,33 +1,39 @@
-# FormatLab Android — public APK build
+# FormatLab Android — offline builds
 
-Ez a repository kizárólag az **offline FormatLab Android v0.2.1** nyilvános, titok- és személyesadat-ellenőrzött forrásából készített teszt APK fordítására szolgál.
+## Jelenlegi mérföldkő
 
-## Állapot
+- **v0.2.1:** lefordított és telefonon igazolt debug APK (képkonvertálás, ZIP, fájlmentés, e-mail-megosztás, CSV→JSON). [Bizonyítottan működő v0.2.1 APK](https://github.com/misssska/formatlab-android-public-build/releases/tag/formatlab-debug-v0.2.1-run-3)
+- **v0.3.0:** a helyben ellenőrzött forráscsomag elkészült, de **APK-fordítás és valódi telefonos teszt még nem történt**.
+- Az eredeti `misssska/formatlab-android-` repository **privát, változatlan**.
 
-- A nyilvános GitHub Actions futtató elindul: [smoke run #39570881540](https://github.com/misssska/formatlab-android-public-build/actions/runs/39570881540) **PASS**.
-- A `.github/workflows/build-public-android.yml` fordítási workflow telepítve.
-- A forrás ZIP feltöltése **még hátravan**. **Nincs még lefordított APK.**
-- A korábbi `misssska/formatlab-android-` repository privát marad.
+## Android v0.3 fordítása telefonról, számítógép nélkül
 
-## Androidos feltöltés Windows nélkül
+1. A ChatGPT-beszélgetésben töltsd le: `FormatLab-Android-v0.3-offline-source.zip`; ne csomagold ki.
+2. Nyisd meg a [GitHub feltöltőt](https://github.com/misssska/formatlab-android-public-build/upload/main).
+3. A ZIP-et a repository **gyökerébe** töltsd fel, változatlan néven, majd `Commit changes` a main ágra.
+4. A `FormatLab Android v0.3 offline debug APK` [GitHub Actions](https://github.com/misssska/formatlab-android-public-build/actions) automatikusan elindul.
+5. Sikeres fordítás után [GitHub Releases](https://github.com/misssska/formatlab-android-public-build/releases) oldalon lesz a `FormatLab-Android-v0.3-debug.apk`.
 
-1. A ChatGPT beszélgetésben töltsd le: **FormatLab-Android-public-v0.2.1-ellenorzott.zip**. Ne csomagold ki.
-2. A GitHub webes felületén válaszd: [Upload files](https://github.com/misssska/formatlab-android-public-build/upload/main).
-3. Töltsd fel pontosan erre a névre, a repository gyökerébe: `FormatLab-Android-public-v0.2.1-ellenorzott.zip`. A forrás nyilvánosan olvasható lesz.
-4. **Commit changes** a `main` ágra. A build automatikusan indul: [GitHub Actions](https://github.com/misssska/formatlab-android-public-build/actions).
-5. Sikeres fordítás után a [Releases](https://github.com/misssska/formatlab-android-public-build/releases) oldalon megjelenik a **FormatLab-Android-v0.2.1-debug.apk** telepítő. A release nyilvános tesztkiadás, nem Play Store alkalmazás.
-
-SHA-256 (kötelező):
+Az engedélyezett forrás ZIP SHA-256 ellenőrzőösszege:
 
 ```text
-a1b72d9b8c8331e5c77c2b04330c77786596fd73c81064649b9b9c4d07e058ed
+04694a0afbc26ebcbe7dd0c4c265d656acc05497d6d5765980c22e4366c0123b
 ```
 
-A workflow az archívum hashét és tartalmát ellenőrzi, majd futtatja a forrásbiztonsági és JavaScript-híd teszteket. Java 17 / Android SDK 35 / Gradle 8.10.2 környezetben debug APK-t próbál fordítani. A teszt APK GitHub Release assetként kerül közzétételre, ami nem fogyasztja az Actions-artifact kvótát.
+A workflow nem használ külső feldolgozószervert; csak **a fejlesztői APK fordítása** történik GitHubon. A telefonon a konvertálás internet nélkül fut.
 
-## Korlátok
+## v0.3 offline funkciók (fejlesztői, még készülékes tesztet igényel)
 
-- Az alkalmazás offline képfájl-, CSV/JSON-, ZIP- és megosztási funkciókra készült. PDF/Office, videó és részletes SVG csak külön szerverrel működne.
-- Debug APK, nem Play Store-kiadás; valódi telefonos teszt még szükséges.
-- Az ingyenes, nyilvános Actions futtatási idő elérhető. A fiók Actions-artifact tárhelye betelt; ezért a munkafolyamat nem artifactként, hanem nyilvános GitHub Release-ként publikálja a debug APK-t. A Release művelethez a futtatás szűkített `contents: write` jogosultsága szükséges.
-- Nem tehető ide hozzáférési kulcs, aláírókulcs, magánkonfiguráció vagy személyes adat.
+- PDF első oldal → PNG/JPG, PDF összes oldala → PNG/JPG ZIP-ben (max. 20 oldal)
+- TXT/CSV/JSON/MD → PDF/DOCX; DOCX → TXT/PDF szövegkinyeréssel
+- Képek → BMP, TIFF, ICO, valamint valódi kontúr- vagy plotteres SVG
+- Képek → PDF, MP4 AAC hang → M4A, fájlelőnézet
+- A v0.2.1 összes korábban tesztelt funkciójának megőrzése
+
+**Korlátok:** nincs régi DOC/XLS import, professzionális PDF↔Word formázáshűség, OCR vagy általános videóátkódolás. AVIF/HEIC csak támogatott Android-rendszerdekóderrel. A forrás nyilvánosan olvasható; titkos kulcsot ne tölts fel.
+
+## Biztonság
+
+- Az Android manifest nem tartalmaz INTERNET vagy tárhely-hozzáférési jogosultságot.
+- A natív dokumentummotor méret-, pixel-, oldalszám- és XML-korlátokkal működik.
+- A GitHub Actions SHA-256 ellenőrzött forrásból dolgozik, majd debug APK-t publikál release assetként, megkerülve a betelt Actions-artifact kvótát.
