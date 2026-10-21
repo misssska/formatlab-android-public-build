@@ -1,0 +1,41 @@
+name: FormatLab Offline Real Office Reference
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'qa/libreoffice_reference.py'
+      - 'qa/test_libreoffice_reference.py'
+      - '.github/workflows/office-reference.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-libroffice-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install free Linux document renderer (CI environment only)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libreoffice-writer
+          libreoffice --version
+      - name: Install Python verification libraries
+        run: python -m pip install --disable-pip-version-check PyMuPDF==1.26.7 Pillow==12.0.0 python-docx==1.2.0
+      - name: Verify source compiles
+        run: python -m py_compile qa/libreoffice_reference.py qa/test_libreoffice_reference.py
+      - name: Test actual LibreOffice engine on synthetic DOCX only
+        working-directory: qa
+        run: python -m unittest -v test_libreoffice_reference.py
+      - name: Document evidence scope
+        run: |
+          echo 'REAL_LIBREOFFICE_REFERENCE=PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo 'ANDROID_ENGINE_INTEGRATION=NOT_BUILT' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Only synthetic test files. No private DOCX or PDF are uploaded.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'CI package fetching does not mean the final Android app needs internet at runtime.' >> "$GITHUB_STEP_SUMMARY"
