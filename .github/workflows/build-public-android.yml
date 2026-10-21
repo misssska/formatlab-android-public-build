@@ -1,0 +1,92 @@
+name: FormatLab Android - public debug APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'FormatLab-Android-public-v0.2.1-ellenorzott.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formatlab-android-public-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-debug:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout public build repository
+        uses: actions/checkout@v4
+
+      - name: Verify trusted source archive before extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f FormatLab-Android-public-v0.2.1-ellenorzott.zip
+          echo 'a1b72d9b8c8331e5c77c2b04330c77786596fd73c81064649b9b9c4d07e058ed  FormatLab-Android-public-v0.2.1-ellenorzott.zip' | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          archive = Path('FormatLab-Android-public-v0.2.1-ellenorzott.zip')
+          with zipfile.ZipFile(archive) as z:
+              entries = z.infolist()
+              assert len(entries) == 62, len(entries)
+              assert all(e.filename.startswith('FormatLab-Android-v0.2/') and '..' not in e.filename.split('/') for e in entries)
+              assert all(((e.external_attr >> 16) & 0o170000) != 0o120000 for e in entries)
+              assert sum(e.file_size for e in entries) < 2_000_000
+              assert z.testzip() is None
+          print('ARCHIVE_VALIDATED')
+          PY
+
+      - name: Extract vetted Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -q FormatLab-Android-public-v0.2.1-ellenorzott.zip
+          test -f FormatLab-Android-v0.2/app/src/main/AndroidManifest.xml
+          test -f FormatLab-Android-v0.2/scripts/audit_public_source.py
+
+      - name: Prepare Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK platform and build tools
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Install Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Verify offline configuration and native JS bridge
+        working-directory: FormatLab-Android-v0.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/audit_public_source.py
+          python3 scripts/verify_android.py
+          node scripts/test_js_bridge.js
+
+      - name: Assemble debug APK
+        working-directory: FormatLab-Android-v0.2
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Confirm APK generated
+        run: test -s FormatLab-Android-v0.2/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload debug APK (1 day)
+        uses: actions/upload-artifact@v4
+        with:
+          name: FormatLab-Android-v0.2.1-debug-APK
+          path: FormatLab-Android-v0.2/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 1
