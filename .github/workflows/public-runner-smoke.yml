@@ -1,0 +1,21 @@
+name: FormatLab public runner smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/public-runner-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Verify free public Actions runner can start
+        run: |
+          echo 'FORMATLAB_PUBLIC_RUNNER_PASS'
+          uname -s
