@@ -52,17 +52,20 @@ jobs:
           test -f FormatLab-Android-v0.2/scripts/audit_public_source.py
 
       - name: Prepare Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK platform using runner preinstalled sdkmanager
+      - name: Setup Android SDK commandline tools
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install Android 35 platform and build tools
         shell: bash
         run: |
           set -euo pipefail
-          echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
-          command -v sdkmanager
           sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
           test -f "${ANDROID_HOME}/platforms/android-35/android.jar"
 
