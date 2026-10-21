@@ -19,7 +19,7 @@ W="{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 MAX_BYTES=40*1024*1024
 
 def words(s):
-    return re.findall(r"[^\\W_]+",s.casefold(),re.UNICODE)
+    return re.findall(r"[^\W_]+",s.casefold(),re.UNICODE)
 
 def docx_structure(path):
     if not path.is_file() or path.stat().st_size>MAX_BYTES:
