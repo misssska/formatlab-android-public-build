@@ -1,0 +1,37 @@
+name: FormatLab Native Office Build-Host Preflight Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/office/**'
+      - '.github/workflows/native-office-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-preflight-unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Static syntax check
+        run: python -m py_compile native/office/preflight.py native/office/test_preflight.py
+      - name: Read-only synthetic prerequisite tests
+        working-directory: native/office
+        run: python -m unittest -v test_preflight.py
+      - name: Run diagnostic but do not claim engine built
+        run: |
+          set +e
+          python native/office/preflight.py > /tmp/office-preflight.json
+          RC=$?
+          cat /tmp/office-preflight.json
+          if [ "$RC" != 0 ] && [ "$RC" != 2 ]; then exit "$RC"; fi
+          echo 'PREPARE_ONLY=PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo 'ANDROID_NATIVE_OFFICE_ENGINE=NOT_BUILT' >> "$GITHUB_STEP_SUMMARY"
+          echo 'CI runner may lack Android NDK and sufficient RAM; do not interpret readiness as conversion PASS.' >> "$GITHUB_STEP_SUMMARY"
