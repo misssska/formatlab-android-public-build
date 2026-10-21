@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'FormatLab-Android-public-v0.2.1-ellenorzott.zip'
+      - '.github/workflows/build-public-android.yml'
   workflow_dispatch:
 
 permissions:
@@ -56,11 +57,15 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Prepare Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install Android SDK platform using runner preinstalled sdkmanager
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
+          command -v sdkmanager
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+          test -f "${ANDROID_HOME}/platforms/android-35/android.jar"
 
-      - name: Install SDK platform and build tools
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
 
       - name: Install Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
