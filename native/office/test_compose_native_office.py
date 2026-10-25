@@ -43,7 +43,8 @@ class NativePackageComposerTests(unittest.TestCase):
             z.writestr(ROOT+'/app/src/main/java/hu/formatlab/android/MainActivity.java',
                        'package hu.formatlab.android; public class MainActivity {}')
             z.writestr(ROOT+'/app/src/main/AndroidManifest.xml',
-                       '<manifest package="hu.formatlab.android"/>')
+                       '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+                       'package="hu.formatlab.android"><application></application></manifest>')
         self.source_sha=hashlib.sha256(self.zip.read_bytes()).hexdigest()
         self.assets={n:b'fixture' for n in REQUIRED_ASSETS}
         self.assets['assets/unpack/user/fonts/LiberationSans-Regular.ttf']=b'font'
