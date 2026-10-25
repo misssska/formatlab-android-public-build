@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib,tempfile,unittest,zipfile
 from pathlib import Path
 from unittest.mock import patch
-from assemble_runtime_overlay import assemble,verify_archive,GateError,PINNED_KIT,SOURCE_UPSTREAM,ROOT
+from assemble_runtime_overlay import assemble,verify_archive,GateError,PINNED_KIT,SOURCE_UPSTREAM,ROOT,OVERLAY_JAVA
 
 class RuntimeOverlayTests(unittest.TestCase):
     def setUp(self):
@@ -15,12 +15,19 @@ class RuntimeOverlayTests(unittest.TestCase):
         self.overlay=self.dir/'overlay'
         self.overlay.mkdir()
         self.out=self.dir/'out'
-        (self.overlay/'FormatLabOfflineOfficeConverter.java').write_text(
-            'package hu.formatlab.android; class FormatLabOfflineOfficeConverter {}\n')
+        for name in OVERLAY_JAVA:
+            (self.overlay/name).write_text(
+                'package hu.formatlab.android; class '+name[:-5]+' {}\n')
         for name in PINNED_KIT:
             p=self.upstream/SOURCE_UPSTREAM/name
             p.parent.mkdir(parents=True,exist_ok=True)
-            p.write_text('package org.libreoffice.kit; class '+name[:-5]+' {}\n')
+            p.write_text(
+                ('package org.libreoffice.kit; import android.app.Activity; '
+                 'class LibreOfficeKit { void init(Activity activity) { '
+                 'activity.getApplication().getCacheDir(); '
+                 'activity.getApplication().getPackageResourcePath(); } }')
+                if name=='LibreOfficeKit.java'
+                else 'package org.libreoffice.kit; class '+name[:-5]+' {}\n')
 
     def fixture(self,*,bad_internet=False,bad_main=False,duplicate=False,traversal=False):
         src={
@@ -28,8 +35,10 @@ class RuntimeOverlayTests(unittest.TestCase):
             f'{ROOT}/app/src/main/java/hu/formatlab/android/MainActivity.java':
                 'package wrong.pkg;' if bad_main else 'package hu.formatlab.android; class MainActivity {}',
             f'{ROOT}/app/src/main/AndroidManifest.xml':
-                '<manifest android.permission.INTERNET="true"/>'
-                if bad_internet else '<manifest package="hu.formatlab.android"/>'
+                '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+                'android.permission.INTERNET="true"><application></application></manifest>'
+                if bad_internet else '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+                'package="hu.formatlab.android"><application></application></manifest>'
         }
         if traversal:src[f'{ROOT}/../injected.txt']='escape'
         with zipfile.ZipFile(self.archive,'w') as z:
@@ -43,8 +52,31 @@ class RuntimeOverlayTests(unittest.TestCase):
         self.assertEqual(r['status'],'SOURCE_OVERLAY_ASSEMBLED')
         self.assertFalse(r['native_lib_bundled'])
         self.assertFalse(r['feature_exposed_in_ui'])
-        self.assertEqual(len(r['sources']),len(PINNED_KIT)+1)
+        self.assertEqual(len(r['sources']),len(PINNED_KIT)+len(OVERLAY_JAVA))
         self.assertTrue((self.out/'FORMATLAB_OFFICE_OVERLAY_EVIDENCE.json').is_file())
+        self.assertTrue(r['separate_process_service_declared'])
+        self.assertTrue(r['upstream_context_adapter_pinned'])
+        manifest=(self.out/'app/src/main/AndroidManifest.xml').read_text()
+        self.assertIn('android:process=":office"',manifest)
+        self.assertIn('android:exported="false"',manifest)
+        lib=(self.out/'app/src/main/java/org/libreoffice/kit/LibreOfficeKit.java').read_text()
+        self.assertIn('init(Context activity)',lib)
+        self.assertNotIn('init(Activity activity)',lib)
+
+    def test_untrusted_upstream_adapter_signature_blocks(self):
+        sha=self.fixture()
+        lib=self.upstream/SOURCE_UPSTREAM/'LibreOfficeKit.java'
+        lib.write_text('package org.libreoffice.kit; class LibreOfficeKit {}')
+        with self.assertRaisesRegex(GateError,'UPSTREAM_CONTEXT_ADAPTER_PATTERN_CHANGED'):
+            assemble(self.archive,self.upstream,self.overlay,self.out,expected_sha=sha)
+        self.assertFalse(self.out.exists())
+
+    def test_missing_service_source_blocks(self):
+        sha=self.fixture()
+        (self.overlay/'FormatLabOfficeService.java').unlink()
+        with self.assertRaisesRegex(GateError,'OVERLAY_SOURCE_MISSING'):
+            assemble(self.archive,self.upstream,self.overlay,self.out,expected_sha=sha)
+        self.assertFalse(self.out.exists())
 
     def test_archive_hash_mismatch_fails(self):
         self.fixture()

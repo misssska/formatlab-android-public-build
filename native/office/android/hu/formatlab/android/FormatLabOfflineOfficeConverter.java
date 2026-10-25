@@ -3,7 +3,7 @@ package hu.formatlab.android;
 // FormatLab offline LibreOfficeKit adapter (candidate, NOT wired into the user UI).
 // It requires the real pinned native engine AND its bootstrap/registry/fonts in APK.
 // Copyright (c) FormatLab contributors. No online fallback.
-import android.app.Activity;
+import android.content.Context;
 import android.content.res.AssetManager;
 import android.net.Uri;
 import android.os.Looper;
@@ -75,7 +75,7 @@ public final class FormatLabOfflineOfficeConverter {
     }
 
     /** All native dependencies and assets must be packaged before any JNI call. */
-    public static boolean isEnginePackaged(Activity activity) {
+    public static boolean isEnginePackaged(Context activity) {
         if (activity == null) return false;
         // Android may keep native libraries inside the APK instead of extracting
         // them into nativeLibraryDir. Inspect the actual installed base APK.
@@ -122,7 +122,7 @@ public final class FormatLabOfflineOfficeConverter {
      * The output remains in private cache until the caller explicitly saves/shares it.
      * This method must not run on the main thread.
      */
-    public static File convertDocxToPrivatePdf(Activity activity, Uri source)
+    public static File convertDocxToPrivatePdf(Context activity, Uri source)
             throws ConversionException {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             throw new ConversionException(Status.CONVERSION_FAILED,
@@ -185,7 +185,7 @@ public final class FormatLabOfflineOfficeConverter {
         }
     }
 
-    private static Office prepareNativeOffice(Activity activity) throws ConversionException {
+    private static Office prepareNativeOffice(Context activity) throws ConversionException {
         if (sharedOffice != null) return sharedOffice;
         try {
             LibreOfficeKit.init(activity);
@@ -202,7 +202,7 @@ public final class FormatLabOfflineOfficeConverter {
         }
     }
 
-    private static void copyBoundedDocx(Activity activity, Uri uri, File destination)
+    private static void copyBoundedDocx(Context activity, Uri uri, File destination)
             throws IOException {
         long count = 0;
         try (InputStream in = activity.getContentResolver().openInputStream(uri);
@@ -290,7 +290,7 @@ public final class FormatLabOfflineOfficeConverter {
     }
 
     /** Caller is responsible for copying an accepted output through SAF and deleting it. */
-    public static void cleanupPrivateOutput(File file, Activity activity) {
+    public static void cleanupPrivateOutput(File file, Context activity) {
         if (file == null || activity == null) return;
         try {
             File canonicalRoot = new File(activity.getCacheDir(), "formatlab-office")
