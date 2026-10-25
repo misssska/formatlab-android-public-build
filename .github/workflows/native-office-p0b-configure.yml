@@ -42,7 +42,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            autoconf automake libtool pkg-config make m4 bison flex gperf xsltproc libfontconfig-dev
+            autoconf automake libtool pkg-config make m4 bison flex gperf xsltproc libfontconfig-dev libarchive-zip-perl libxml-parser-perl
 
       - name: Android SDK and pinned NDK
         uses: android-actions/setup-android@v4
