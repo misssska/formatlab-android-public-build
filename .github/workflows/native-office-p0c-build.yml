@@ -13,8 +13,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: formatlab-p0c-validation
-  cancel-in-progress: true
+  group: formatlab-p0c-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   native-arm64-proof:
