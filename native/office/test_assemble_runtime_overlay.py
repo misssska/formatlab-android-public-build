@@ -78,6 +78,15 @@ class RuntimeOverlayTests(unittest.TestCase):
             assemble(self.archive,self.upstream,self.overlay,self.out,expected_sha=sha)
         self.assertFalse(self.out.exists())
 
+    def test_client_timeout_bound_and_cancelled_on_finish(self):
+        client = (Path(__file__).parent/'android/hu/formatlab/android/FormatLabOfficeProcessClient.java').read_text()
+        self.assertIn('FormatLabOfficeService.MAX_SECONDS + 20L', client)
+        self.assertIn('main.postDelayed(timeout, CLIENT_TIMEOUT_MS)', client)
+        self.assertIn('main.removeCallbacks(timeout)', client)
+        self.assertIn('OFFICE_CLIENT_TIMEOUT', client)
+        self.assertIn('if (finished) return;', client)
+        self.assertIn('context.unbindService(connection)', client)
+
     def test_archive_hash_mismatch_fails(self):
         self.fixture()
         with self.assertRaisesRegex(GateError,'SHA256'):verify_archive(self.archive)
