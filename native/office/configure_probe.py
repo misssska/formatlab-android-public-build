@@ -78,7 +78,8 @@ def run_probe(source: Path, sdk: Path, ndk: Path, *, timeout: int = 600,
     result["configure_attempted"] = True
     started = time.monotonic()
     try:
-        done = runner(["./autogen.sh"], cwd=str(source), env=env,
+        # Upstream autogen.sh is a Perl/sh polyglot without a kernel shebang.
+        done = runner(["perl", "autogen.sh"], cwd=str(source), env=env,
                       timeout=timeout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                       text=True, errors="replace", check=False)
     except subprocess.TimeoutExpired:
