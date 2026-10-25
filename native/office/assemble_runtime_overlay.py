@@ -44,7 +44,7 @@ def verify_archive(archive:Path,expected_sha:str=ORIGINAL_SHA256)->list[zipfile.
             for item in items:
                 name=item.filename
                 p=PurePosixPath(name)
-                if (not name.startswith(ROOT+'/') or name.startswith('/') or
+                if (name.rstrip('/') != str(p) or not name.startswith(ROOT+'/') or name.startswith('/') or
                     '\\' in name or '\x00' in name or
                     any(part=='..' for part in p.parts) or
                     len(set(p.parts))==0 or
