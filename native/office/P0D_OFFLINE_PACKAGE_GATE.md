@@ -51,3 +51,12 @@ public_release_approved=false, even on a static PASS.
 
 No private user documents, signing keys or sensitive artifacts are checked into
 this public repository. This CI runs synthetic ZIP fixtures only.
+
+## Runtime dependency hardening (2026-10-25)
+
+The pinned upstream Android `LibreOfficeKit.NativeLibLoader` explicitly loads
+12 NSS/SQLite shared libraries, `libc++_shared.so`, and `liblo-native-code.so`.
+The package checker now requires all 14 ARM64 shared objects and verifies
+that each starts with an ELF64 AArch64 shared-object header, with a realistic
+minimum size. A library name alone is not enough to pass; the check remains
+static and cannot prove the libraries will successfully link at runtime.

@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from offline_apk_gate import (
-    REQUIRED,LIB,PACKAGE_ID,scan_entries,assess_metadata,
+    REQUIRED,LIB,PACKAGE_ID,REQUIRED_NATIVE_LIBS,NATIVE_DEPENDENCIES,scan_entries,assess_metadata,
     elf_arm64_header,sdk_aapt,inspect_apk)
 
 ELF=b'\x7fELF\x02\x01'+bytes(10)+(3).to_bytes(2,'little')+(183).to_bytes(2,'little')+bytes(44)
@@ -15,7 +15,9 @@ def complete_names():
 class StaticPackageGateTests(unittest.TestCase):
     def valid(self,**kwargs):
         args={'names':complete_names(),'package':PACKAGE_ID,'permissions':[],
-              'elf_header':ELF,'lib_size':3000000}
+              'elf_header':ELF,'lib_size':3000000,
+              'native_headers':{x:(ELF,3000000 if x==LIB else 8192)
+                                for x in REQUIRED_NATIVE_LIBS}}
         args.update(kwargs)
         return assess_metadata(**args)
 
@@ -36,6 +38,22 @@ class StaticPackageGateTests(unittest.TestCase):
     def test_missing_bootstrap_rejected(self):
         r=self.valid(names=complete_names()-{'assets/program/fundamentalrc'})
         self.assertIn('REQUIRED_RUNTIME_ASSETS_MISSING',r['issues'])
+
+    def test_missing_nss_dependency_denied(self):
+        item='lib/arm64-v8a/libnss3.so'
+        self.assertIn('NATIVE_RUNTIME_DEPENDENCIES_MISSING',
+                      self.valid(names=complete_names()-{item})['issues'])
+
+    def test_dependency_wrong_abi_denied(self):
+        bad=b'\x7fELF\x02\x01'+bytes(10)+(3).to_bytes(2,'little')+(62).to_bytes(2,'little')
+        native={x:(ELF,3000000 if x==LIB else 8192) for x in REQUIRED_NATIVE_LIBS}
+        native['lib/arm64-v8a/libnss3.so']=(bad,8192)
+        self.assertIn('NATIVE_RUNTIME_DEPENDENCY_INVALID',
+                      self.valid(native_headers=native)['issues'])
+
+    def test_dependency_headers_not_inspected_denied(self):
+        self.assertIn('NATIVE_RUNTIME_DEPENDENCIES_NOT_INSPECTED',
+                      self.valid(native_headers=None)['issues'])
 
     def test_missing_font_rejected(self):
         self.assertIn('BUNDLED_FONTS_MISSING',self.valid(names=set(REQUIRED))['issues'])
@@ -88,7 +106,8 @@ class StaticPackageGateTests(unittest.TestCase):
             apk=Path(d)/'complete-but-not-working.apk'
             with zipfile.ZipFile(apk,'w',compression=zipfile.ZIP_STORED) as z:
                 for name in complete_names():
-                    z.writestr(name,ELF+bytes(1100000) if name==LIB else b'test asset')
+                    z.writestr(name,ELF+bytes(1100000) if name==LIB else
+                               ELF+bytes(8192) if name in REQUIRED_NATIVE_LIBS else b'test asset')
             with patch('offline_apk_gate.sdk_aapt',return_value=(PACKAGE_ID,[])):
                 result=inspect_apk(apk,aapt='mock')
             self.assertEqual(result['status'],'PACKAGE_STATIC_PASS')
@@ -99,7 +118,9 @@ class StaticPackageGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             apk=Path(d)/'missing-lib.apk'
             with zipfile.ZipFile(apk,'w',compression=zipfile.ZIP_STORED) as z:
-                for name in complete_names()-{LIB}:z.writestr(name,b'test')
+                for name in complete_names()-{LIB}:
+                    z.writestr(name,ELF+bytes(8192) if name in REQUIRED_NATIVE_LIBS
+                               else b'test')
                 z.writestr('padding.bin',bytes(1800))
             with patch('offline_apk_gate.sdk_aapt',return_value=(PACKAGE_ID,[])):
                 result=inspect_apk(apk,aapt='mock')

@@ -19,8 +19,12 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.security.SecureRandom;
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.Enumeration;
+import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /**
  * A narrow, strictly offline DOCX -> PDF integration candidate.
@@ -41,7 +45,15 @@ public final class FormatLabOfflineOfficeConverter {
     private static final String TAG = "FormatLabOffice";
     private static final Object NATIVE_LOCK = new Object();
     private static Office sharedOffice = null;
-    private static final SecureRandom RANDOM = new SecureRandom();
+    private static final int MAX_ZIP_ENTRIES = 2048;
+    private static final long MAX_DOC_XML_BYTES = 12L * 1024L * 1024L;
+    private static final long MAX_TOTAL_UNCOMPRESSED = 200L * 1024L * 1024L;
+    private static final String[] REQUIRED_NATIVE_LIBS = {
+        "liblo-native-code.so", "libc++_shared.so", "libnspr4.so", "libplds4.so",
+        "libplc4.so", "libnssutil3.so", "libfreebl3.so", "libsqlite3.so",
+        "libsoftokn3.so", "libnss3.so", "libnssckbi.so", "libnssdbm3.so",
+        "libsmime3.so", "libssl3.so"
+    };
 
     private FormatLabOfflineOfficeConverter() {}
 
@@ -65,8 +77,16 @@ public final class FormatLabOfflineOfficeConverter {
     /** All native dependencies and assets must be packaged before any JNI call. */
     public static boolean isEnginePackaged(Activity activity) {
         if (activity == null) return false;
-        File nativeDir = new File(activity.getApplicationInfo().nativeLibraryDir);
-        if (!new File(nativeDir, "liblo-native-code.so").isFile()) return false;
+        // Android may keep native libraries inside the APK instead of extracting
+        // them into nativeLibraryDir. Inspect the actual installed base APK.
+        try (ZipFile archive = new ZipFile(activity.getApplicationInfo().sourceDir)) {
+            for (String libName : REQUIRED_NATIVE_LIBS) {
+                ZipEntry entry = archive.getEntry("lib/arm64-v8a/" + libName);
+                if (entry == null || entry.getSize() < 4096) return false;
+            }
+        } catch (IOException exception) {
+            return false;
+        }
         AssetManager assets = activity.getAssets();
         String[] requiredAssets = {
                 "program/fundamentalrc",
@@ -203,11 +223,54 @@ public final class FormatLabOfflineOfficeConverter {
             }
         }
         if (count < 8) throw new ConversionException(Status.BAD_INPUT, "DOCX is empty or truncated");
-        try (FileInputStream in = new FileInputStream(destination)) {
-            int a = in.read(), b = in.read();
-            if (a != 'P' || b != 'K') {
-                throw new ConversionException(Status.BAD_INPUT, "Input is not a ZIP-based DOCX");
+        validateDocxArchive(destination);
+    }
+
+    private static void validateDocxArchive(File path) throws IOException {
+        int count = 0;
+        long total = 0;
+        boolean documentXml = false;
+        boolean contentTypes = false;
+        Set<String> seen = new HashSet<>();
+        try (ZipFile zip = new ZipFile(path)) {
+            Enumeration<? extends ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                if (++count > MAX_ZIP_ENTRIES || name == null || name.startsWith("/")
+                        || name.contains("\\") || name.contains("../") || name.contains("/./")
+                        || name.equals("..") || name.endsWith("/..") || !seen.add(name)) {
+                    throw new ConversionException(Status.BAD_INPUT,
+                            "DOCX archive entries invalid");
+                }
+                long unpacked = entry.getSize();
+                long packed = entry.getCompressedSize();
+                if (unpacked < 0 || packed < 0
+                        || unpacked > MAX_TOTAL_UNCOMPRESSED - total
+                        || (packed == 0 && unpacked > 0)
+                        || (packed > 0 && unpacked / packed > 500)) {
+                    throw new ConversionException(Status.BAD_INPUT,
+                            "DOCX archive expansion limit exceeded");
+                }
+                total += unpacked;
+                if (name.equals("[Content_Types].xml")) contentTypes = true;
+                if (name.equals("word/document.xml")) {
+                    documentXml = true;
+                    if (unpacked > MAX_DOC_XML_BYTES) {
+                        throw new ConversionException(Status.BAD_INPUT,
+                                "Word XML exceeds size limit");
+                    }
+                }
+                String lower = name.toLowerCase(Locale.ROOT);
+                if (lower.equals("word/vbaproject.bin") || lower.endsWith("/vbaproject.bin")) {
+                    throw new ConversionException(Status.BAD_INPUT,
+                            "Macro-enabled Word archives are not accepted");
+                }
             }
+        }
+        if (!documentXml || !contentTypes) {
+            throw new ConversionException(Status.BAD_INPUT,
+                    "Word document XML or content types missing");
         }
     }
 
