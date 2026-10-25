@@ -6,7 +6,7 @@ ARM64 library directory, and exact P0c evidence. No download, shell, APK signing
 or release occurs here. Production UI remains disabled until device acceptance.
 """
 from __future__ import annotations
-import argparse,hashlib,json,shutil,sys,zipfile
+import argparse,hashlib,json,re,shutil,sys,zipfile
 from pathlib import Path
 
 from assemble_runtime_overlay import assemble,GateError,ORIGINAL_SHA256
@@ -132,8 +132,14 @@ def compose(source_zip:Path,upstream_tree:Path,java_overlay:Path,
         # transplanted from org.libreoffice into hu.formatlab.android.
         fonts=(asset_root/'unpack/etc/fonts/fonts.conf')
         configuration=fonts.read_text(encoding='utf-8')
-        if PACKAGE_ID not in configuration:
+        # Upstream copyUnpackAssets expands @@APPLICATION_ID@@ to its own
+        # Android app ID; remap ONLY the well-known fontconfig cache path.
+        matches=re.findall(r'/data/data/([A-Za-z0-9_.]+)/fontconfig',configuration)
+        if len(matches)!=1 or '@@APPLICATION_ID@@' in configuration:
             raise GateError('FONTCONFIG_APPLICATION_ID_UNVERIFIED')
+        configuration=configuration.replace('/data/data/'+matches[0]+'/fontconfig',
+                                            '/data/data/'+PACKAGE_ID+'/fontconfig')
+        fonts.write_text(configuration,encoding='utf-8')
         result.update(status='NATIVE_OFFICE_SOURCE_COMPOSED_NOT_RELEASED',
                       native_lib_bundled=True,reference_apk_sha256=proof['apk_sha256'],
                       verified_library_count=len(proof['libs']),
