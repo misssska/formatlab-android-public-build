@@ -3,7 +3,6 @@ package hu.formatlab.android;
 import android.app.Service;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -51,7 +50,9 @@ public final class FormatLabOfficeService extends Service {
             send(reply, RESULT_ERROR, "OFFICE_BUSY", null);
             return true;
         }
+        AtomicBoolean completed = new AtomicBoolean(false);
         Runnable watchdog = () -> {
+            if (!completed.compareAndSet(false, true)) return;
             send(reply, RESULT_ERROR, "OFFICE_TIMEOUT", null);
             // Kill only the :office process. Thread interruption is insufficient
             // for arbitrary native LibreOffice calls that can deadlock.
@@ -62,12 +63,18 @@ public final class FormatLabOfficeService extends Service {
             File pdf = null;
             try {
                 pdf = FormatLabOfflineOfficeConverter.convertDocxToPrivatePdf(this, source);
-                send(reply, RESULT_OK, "PDF_READY", pdf.getAbsolutePath());
+                if (completed.compareAndSet(false, true)) {
+                    send(reply, RESULT_OK, "PDF_READY", pdf.getAbsolutePath());
+                }
             } catch (FormatLabOfflineOfficeConverter.ConversionException ex) {
-                send(reply, RESULT_ERROR, ex.status.name(), null);
+                if (completed.compareAndSet(false, true)) {
+                    send(reply, RESULT_ERROR, ex.status.name(), null);
+                }
             } catch (RuntimeException | LinkageError ex) {
                 Log.e(TAG, "Native conversion worker failed", ex);
-                send(reply, RESULT_ERROR, "OFFICE_WORKER_FAILED", null);
+                if (completed.compareAndSet(false, true)) {
+                    send(reply, RESULT_ERROR, "OFFICE_WORKER_FAILED", null);
+                }
             } finally {
                 mainHandler.removeCallbacks(watchdog);
                 busy.set(false);
