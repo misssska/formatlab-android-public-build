@@ -1,0 +1,79 @@
+name: FormatLab P0 LibreOffice source + ARM64 NDK smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'native/office/**'
+      - '.github/workflows/native-office-arm64-source-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-source-and-ndk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout FormatLab verification scripts
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Syntax and synthetic safety gates
+        run: |
+          set -euo pipefail
+          python -m py_compile native/office/engine_source_gate.py native/office/arm64_smoke.py native/office/test_engine_source_gate.py native/office/test_arm64_smoke.py
+          (cd native/office && python -m unittest -v test_engine_source_gate.py test_arm64_smoke.py)
+
+      - name: Android SDK setup
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install pinned Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install 'ndk;27.2.12479018'
+          test -f "$ANDROID_HOME/ndk/27.2.12479018/source.properties"
+
+      - name: Fetch exact LibreOffice source commit (partial sparse clone)
+        shell: bash
+        env:
+          UPSTREAM_SHA: f2820323446ae210668dcb6422ddcd55ce939dc2
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/formatlab-libreoffice-source"
+          mkdir -p "$ROOT"
+          git -C "$ROOT" init -q
+          git -C "$ROOT" remote add origin https://github.com/LibreOffice/core.git
+          git -C "$ROOT" sparse-checkout init --cone
+          git -C "$ROOT" sparse-checkout set android distro-configs include/LibreOfficeKit
+          git -C "$ROOT" -c protocol.version=2 fetch --depth=1 --filter=blob:none origin "$UPSTREAM_SHA"
+          git -C "$ROOT" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$ROOT" rev-parse HEAD)" = "$UPSTREAM_SHA"
+          python native/office/engine_source_gate.py "$ROOT" --sdk "$ANDROID_HOME" --ndk "$ANDROID_HOME/ndk/27.2.12479018"
+
+      - name: Actual AArch64 ELF shared-library compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python native/office/arm64_smoke.py "$ANDROID_HOME/ndk/27.2.12479018" --api-level 24
+
+      - name: Record strict evidence boundary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## FormatLab native Office P0'
+            echo 'Pinned source checkout + NDK smoke steps above are individually authoritative.'
+            echo 'LIBREOFFICEKIT_ENGINE_BUILT=NO'
+            echo 'OFFLINE_DOCX_TO_PDF_QUALITY=NOT_TESTED'
+            echo 'ANDROID_APK_BUILT=NO'
+            echo 'DO_NOT_MERGE_OR_ADVERTISE_AS_OFFICE_ENGINE'
+          } >> "$GITHUB_STEP_SUMMARY"
