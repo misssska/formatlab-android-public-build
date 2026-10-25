@@ -238,8 +238,11 @@ public final class FormatLabOfflineOfficeConverter {
                 ZipEntry entry = entries.nextElement();
                 String name = entry.getName();
                 if (++count > MAX_ZIP_ENTRIES || name == null || name.startsWith("/")
+                        || name.startsWith("./") || name.contains("//")
                         || name.contains("\\") || name.contains("../") || name.contains("/./")
-                        || name.equals("..") || name.endsWith("/..") || !seen.add(name)) {
+                        || name.equals(".") || name.equals("..") || name.endsWith("/.")
+                        || name.endsWith("/..") || name.indexOf((char) 0) >= 0
+                        || !seen.add(name)) {
                     throw new ConversionException(Status.BAD_INPUT,
                             "DOCX archive entries invalid");
                 }
