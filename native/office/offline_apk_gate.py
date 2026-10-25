@@ -6,8 +6,16 @@ from pathlib import Path,PurePosixPath
 
 PACKAGE_ID='hu.formatlab.android'
 LIB='lib/arm64-v8a/liblo-native-code.so'
+# Exact dependencies loaded by pinned upstream
+# android/Bootstrap/src/org/libreoffice/kit/LibreOfficeKit.java NativeLibLoader.
+NATIVE_DEPENDENCIES=(
+    'libc++_shared.so','libnspr4.so','libplds4.so','libplc4.so',
+    'libnssutil3.so','libfreebl3.so','libsqlite3.so','libsoftokn3.so',
+    'libnss3.so','libnssckbi.so','libnssdbm3.so','libsmime3.so','libssl3.so',
+)
+REQUIRED_NATIVE_LIBS=(LIB,)+tuple('lib/arm64-v8a/'+x for x in NATIVE_DEPENDENCIES)
 REQUIRED=(
-    'AndroidManifest.xml','classes.dex',LIB,
+    'AndroidManifest.xml','classes.dex',*REQUIRED_NATIVE_LIBS,
     'assets/program/fundamentalrc','assets/program/bootstraprc',
     'assets/program/unorc','assets/program/versionrc',
     'assets/unpack/program/sofficerc',
@@ -50,7 +58,8 @@ def scan_entries(infos:list[zipfile.ZipInfo])->tuple[set[str],list[str]]:
     return seen,sorted(set(failures))
 
 def assess_metadata(names:set[str],*,package:str,permissions:list[str],
-                    elf_header:bytes,lib_size:int)->dict:
+                    elf_header:bytes,lib_size:int,
+                    native_headers:dict[str,tuple[bytes,int]]|None=None)->dict:
     reasons=[]
     if package!=PACKAGE_ID:reasons.append('WRONG_APPLICATION_ID')
     if permissions:reasons.append('UNEXPECTED_ANDROID_PERMISSIONS')
@@ -61,6 +70,16 @@ def assess_metadata(names:set[str],*,package:str,permissions:list[str],
     if not fonts:reasons.append('BUNDLED_FONTS_MISSING')
     if not elf_arm64_header(elf_header) or not 1000000<=lib_size<=1024**3:
         reasons.append('NATIVE_ENGINE_NOT_ARM64_ELF_SHARED')
+    if any(x not in names for x in REQUIRED_NATIVE_LIBS):
+        reasons.append('NATIVE_RUNTIME_DEPENDENCIES_MISSING')
+    if native_headers is None:
+        reasons.append('NATIVE_RUNTIME_DEPENDENCIES_NOT_INSPECTED')
+    else:
+        for name in REQUIRED_NATIVE_LIBS:
+            raw,length=native_headers.get(name,(b'',0))
+            if not elf_arm64_header(raw) or length<(1000000 if name==LIB else 4096):
+                reasons.append('NATIVE_RUNTIME_DEPENDENCY_INVALID')
+                break
     return {'status':'PACKAGE_STATIC_PASS' if not reasons else 'BLOCKED',
             'issues':reasons,'package':package,'permissions':permissions,
             'missing_assets':missing,'bundled_font_count':len(fonts),
@@ -103,12 +122,15 @@ def inspect_apk(apk:Path,*,aapt:str|Path|None)->dict:
             names,errors=scan_entries(z.infolist())
             if errors:
                 base['issues']=errors;return base
-            info=z.getinfo(LIB) if LIB in names else None
-            if info is None:
-                header=b'';lib_size=0
-            else:
-                with z.open(info) as f:header=f.read(64)
-                lib_size=info.file_size
+            native_headers={}
+            for native_name in REQUIRED_NATIVE_LIBS:
+                info=z.getinfo(native_name) if native_name in names else None
+                if info is None:
+                    native_headers[native_name]=(b'',0)
+                else:
+                    with z.open(info) as f:
+                        native_headers[native_name]=(f.read(64),info.file_size)
+            header,lib_size=native_headers[LIB]
     except (OSError,ValueError,zipfile.BadZipFile,RuntimeError,KeyError):
         base['issues']=['APK_ZIP_INVALID'];return base
     try:
@@ -116,7 +138,8 @@ def inspect_apk(apk:Path,*,aapt:str|Path|None)->dict:
     except ValueError as exc:
         base['issues']=[str(exc)];return base
     result=assess_metadata(names,package=package,permissions=permissions,
-                           elf_header=header,lib_size=lib_size)
+                           elf_header=header,lib_size=lib_size,
+                           native_headers=native_headers)
     sha=hashlib.sha256()
     with apk.open('rb') as f:
         for chunk in iter(lambda:f.read(1024**2),b''):sha.update(chunk)
