@@ -98,7 +98,7 @@ def assemble(archive:Path,upstream:Path,overlay:Path,output:Path,
         copied=[]
         for name in PINNED_KIT:
             src=Path(upstream)/SOURCE_UPSTREAM/name
-            if not src.is_file() or 'package org.libreoffice.kit;' not in src.read_text(errors='replace'):
+            if src.is_symlink() or not src.is_file() or 'package org.libreoffice.kit;' not in src.read_text(errors='replace'):
                 raise GateError('UPSTREAM_KIT_SOURCE_MISSING:'+name)
             content=src.read_text(encoding='utf-8')
             if name=='LibreOfficeKit.java':
@@ -125,7 +125,7 @@ def assemble(archive:Path,upstream:Path,overlay:Path,output:Path,
                            'sha256':sha256(api_dest/name)})
         for name in OVERLAY_JAVA:
             src=Path(overlay)/name
-            if not src.is_file() or 'package hu.formatlab.android;' not in src.read_text(errors='replace'):
+            if src.is_symlink() or not src.is_file() or 'package hu.formatlab.android;' not in src.read_text(errors='replace'):
                 raise GateError('OVERLAY_SOURCE_MISSING:'+name)
             target=appjava/name
             if target.exists():raise GateError('ANDROID_OVERLAY_ALREADY_EXISTS')
