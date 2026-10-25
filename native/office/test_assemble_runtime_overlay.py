@@ -87,6 +87,16 @@ class RuntimeOverlayTests(unittest.TestCase):
         self.assertIn('if (finished) return;', client)
         self.assertIn('context.unbindService(connection)', client)
 
+    def test_docx_zip_path_and_pdf_trailer_guards(self):
+        converter = (Path(__file__).parent/'android/hu/formatlab/android/FormatLabOfflineOfficeConverter.java').read_text()
+        for guard in ('name.startsWith("./")', 'name.contains("//")',
+                      'name.endsWith("/.")', 'name.indexOf((char) 0) >= 0'):
+            self.assertIn(guard, converter)
+        self.assertIn('new RandomAccessFile(file, "r")', converter)
+        self.assertIn('PDF end marker missing', converter)
+        self.assertIn("tail[i + 4] == 'F'", converter)
+        self.assertIn('MAX_PDF_BYTES', converter)
+
     def test_archive_hash_mismatch_fails(self):
         self.fixture()
         with self.assertRaisesRegex(GateError,'SHA256'):verify_archive(self.archive)
