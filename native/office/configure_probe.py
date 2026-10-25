@@ -22,8 +22,10 @@ REQUIRED_TOOLS = ("git", "perl", "autoconf", "aclocal", "automake", "pkg-config"
 SDK_PACKAGES = ("platforms/android-35", "build-tools/35.0.0")
 
 def check(source: Path, sdk: Path, ndk: Path, *, min_free_gib: int = MIN_FREE_GIB,
-          which=shutil.which, disk=shutil.disk_usage) -> dict:
+          which=None, disk=None) -> dict:
     source, sdk, ndk = (Path(x).resolve() for x in (source, sdk, ndk))
+    which = shutil.which if which is None else which
+    disk = shutil.disk_usage if disk is None else disk
     identity = inspect(source)
     blockers = list(identity.get("issues", []))
     if identity.get("status") != "PASS":
