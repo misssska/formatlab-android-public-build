@@ -132,4 +132,13 @@ class RuntimeOverlayTests(unittest.TestCase):
         with self.assertRaisesRegex(GateError,'UNSAFE_SOURCE_ZIP'):
             verify_archive(self.archive,expected_sha=sha)
 
+    def test_real_service_single_terminal_response_guard(self):
+        """Regression gate: worker success/error and watchdog share one completion latch."""
+        source = (Path(__file__).parent/'android/hu/formatlab/android/FormatLabOfficeService.java').read_text()
+        self.assertIn('AtomicBoolean completed = new AtomicBoolean(false)', source)
+        self.assertEqual(source.count('completed.compareAndSet(false, true)'), 4)
+        self.assertIn('if (!completed.compareAndSet(false, true)) return;', source)
+        self.assertIn('Process.killProcess(Process.myPid())', source)
+        self.assertIn('mainHandler.removeCallbacks(watchdog)', source)
+
 if __name__=='__main__':unittest.main()
