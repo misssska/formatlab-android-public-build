@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Bounded actual LibreOffice ARM64 build. Does not integrate FormatLab APK."""
+from __future__ import annotations
+import argparse, hashlib, json, os, shutil, signal, subprocess, sys, time
+from pathlib import Path
+from zipfile import ZipFile, BadZipFile
+from engine_source_gate import inspect, config_preview
+
+MIN_DISK_GIB=12
+MIN_MEM_GIB=10
+WATCH_MIN_DISK_GIB=5
+WATCH_MIN_MEM_GIB=1.5
+
+def memory_gib(path=Path('/proc/meminfo')):
+    try:
+        for line in path.read_text().splitlines():
+            if line.startswith('MemAvailable:'):
+                return int(line.split()[1])/(1024*1024)
+    except (OSError, IndexError, ValueError):
+        pass
+    return None
+
+def disposable(source, root=None):
+    if os.environ.get('FORMATLAB_DISPOSABLE_CHECKOUT')!='YES':
+        raise ValueError('DISPOSABLE_OPT_IN_REQUIRED')
+    if os.environ.get('FORMATLAB_ALLOW_NATIVE_BUILD')!='YES':
+        raise ValueError('NATIVE_BUILD_OPT_IN_REQUIRED')
+    source=Path(source).resolve(strict=True)
+    root=Path(root or os.environ.get('RUNNER_TEMP','/nonexistent')).resolve()
+    if source==root or not source.is_relative_to(root):
+        raise ValueError('SOURCE_NOT_UNDER_DISPOSABLE_ROOT')
+    if source.name!='formatlab-lo-p0c':
+        raise ValueError('SOURCE_DIRECTORY_NAME_NOT_PINNED')
+
+def attest_arm64(path, min_bytes=1_000_000):
+    path=Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('ENGINE_MISSING_OR_SYMLINK')
+    n=path.stat().st_size
+    if n<min_bytes or n>1024**3:
+        raise ValueError('ENGINE_SIZE_OUT_OF_RANGE')
+    with path.open('rb') as f:
+        h=f.read(64)
+    if len(h)!=64 or h[:6]!=b'\x7fELF\x02\x01':
+        raise ValueError('NOT_ELF64_LITTLE_ENDIAN')
+    typ=int.from_bytes(h[16:18],'little')
+    machine=int.from_bytes(h[18:20],'little')
+    if (typ,machine)!=(3,183):
+        raise ValueError('NOT_ARM64_SHARED_OBJECT')
+    digest=hashlib.sha256()
+    with path.open('rb') as f:
+        for chunk in iter(lambda:f.read(1024*1024),b''):
+            digest.update(chunk)
+    return {'status':'PASS','abi':'arm64-v8a','elf_machine':183,
+            'size_bytes':n,'sha256':digest.hexdigest()}
+
+def upstream_apks(source):
+    """Upstream LibreOffice APK is NOT a FormatLab app."""
+    root=Path(source)/'android/app/build/outputs/apk'
+    found=[]
+    if root.is_dir():
+        for p in sorted(root.rglob('*.apk')):
+            if p.is_symlink() or not p.is_file():
+                continue
+            try:
+                with ZipFile(p) as z:
+                    names=z.namelist()
+                    if 'AndroidManifest.xml' in names and any(
+                       x.endswith('/arm64-v8a/liblo-native-code.so') for x in names):
+                        found.append({'path':str(p.relative_to(source)),'bytes':p.stat().st_size})
+            except BadZipFile:
+                continue
+    return {'upstream_reference_apks':found,'formatlab_apk_built':False}
+
+def preflight(source,sdk,ndk,*,disk_gib=None,mem_gib=None,require_approval=True,root=None):
+    source,sdk,ndk=(Path(p).resolve() for p in (source,sdk,ndk))
+    problems=[]
+    if require_approval:
+        try: disposable(source,root)
+        except (OSError,ValueError) as e: problems.append(str(e))
+    src=inspect(source)
+    if src.get('status')!='PASS': problems.append('SOURCE_PIN_FAILED')
+    try: config_preview(sdk,ndk)
+    except ValueError as e: problems.append('ANDROID_TOOLCHAIN_INVALID:'+str(e))
+    if not (source/'config_host.mk').is_file() or not (source/'Makefile').is_file():
+        problems.append('UPSTREAM_NOT_CONFIGURED')
+    if not (sdk/'platforms/android-35').is_dir():
+        problems.append('ANDROID_35_NOT_INSTALLED')
+    if not shutil.which('make'):
+        problems.append('MAKE_MISSING')
+    try:
+        disk_gib=disk_gib if disk_gib is not None else shutil.disk_usage(source).free/(1024**3)
+    except OSError: disk_gib=0
+    mem_gib=mem_gib if mem_gib is not None else memory_gib()
+    if disk_gib<MIN_DISK_GIB: problems.append('DISK_LIMIT')
+    if mem_gib is None or mem_gib<MIN_MEM_GIB: problems.append('MEMORY_LIMIT')
+    return {'status':'READY_TO_BUILD' if not problems else 'BLOCKED','blockers':problems,
+            'disk_available_gib':round(disk_gib,2),
+            'mem_available_gib':round(mem_gib,2) if mem_gib is not None else None,
+            'pinned_source_commit':src.get('commit'),
+            'engine_compiled':False,'formatlab_apk_built':False}
+
+def build_stages(jobs):
+    """Top-level build must precede the Android target; android alone lacks lib*.a."""
+    if not 1<=jobs<=4:
+        raise ValueError('PARALLEL_JOB_LIMIT')
+    return [('core_build',['make',f'-j{jobs}','build']),
+            ('android_link',['make',f'-j{jobs}','android'])]
+
+
+def build(source,sdk,ndk,*,jobs=3,timeout_sec=12600,log=None):
+    source=Path(source).resolve()
+    stages=build_stages(jobs)
+    if not 120<=timeout_sec<=18000:
+        raise ValueError('TIMEOUT_OUT_OF_RANGE')
+    evidence=preflight(source,sdk,ndk)
+    evidence.update(build_attempted=False, build_stages=[stage for stage,_ in stages],
+                    completed_stages=[])
+    if evidence['status']!='READY_TO_BUILD':
+        return evidence
+    log=Path(log or Path(os.environ.get('RUNNER_TEMP','/tmp'))/'formatlab-p0c-make.log')
+    log.parent.mkdir(parents=True,exist_ok=True)
+    start=time.monotonic()
+    evidence['build_attempted']=True
+    failure=None
+    try:
+        with log.open('wb') as out:
+            for stage,argv in stages:
+                remaining=timeout_sec-(time.monotonic()-start)
+                if remaining<=0:
+                    failure=('BUILD_TIMEOUT',stage,124)
+                    break
+                out.write(('\n== FORMATLAB STAGE '+stage+' ==\n').encode())
+                out.flush()
+                child=subprocess.Popen(argv,cwd=source,
+                    stdin=subprocess.DEVNULL,stdout=out,stderr=subprocess.STDOUT,
+                    start_new_session=True)
+                code=None
+                try:
+                    while code is None:
+                        remaining=timeout_sec-(time.monotonic()-start)
+                        if remaining<=0:
+                            code=124
+                            break
+                        try:
+                            code=child.wait(timeout=min(60,remaining))
+                        except subprocess.TimeoutExpired:
+                            free_disk=shutil.disk_usage(source).free/(1024**3)
+                            free_mem=memory_gib()
+                            evidence['watchdog_samples']=evidence.get('watchdog_samples',0)+1
+                            progress={'stage':stage,'elapsed_sec':round(time.monotonic()-start),
+                                      'disk_free_gib':round(free_disk,2),
+                                      'memory_available_gib':round(free_mem,2) if free_mem is not None else None,
+                                      'log_bytes':log.stat().st_size}
+                            evidence['last_watchdog']=progress
+                            print('[P0C_PROGRESS] '+json.dumps(progress),flush=True)
+                            if free_disk<WATCH_MIN_DISK_GIB or (free_mem is not None and free_mem<WATCH_MIN_MEM_GIB):
+                                code=125
+                finally:
+                    if child.poll() is None:
+                        try:os.killpg(child.pid,signal.SIGTERM)
+                        except ProcessLookupError:pass
+                        try:child.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            try:os.killpg(child.pid,signal.SIGKILL)
+                            except ProcessLookupError:pass
+                            child.wait(timeout=10)
+                if code:
+                    failure=('BUILD_TIMEOUT' if code==124 else 'BUILD_RESOURCE_WATCHDOG' if code==125 else 'BUILD_FAILED',stage,code)
+                    break
+                evidence['completed_stages'].append(stage)
+                if stage=='core_build':
+                    archives=len(list((source/'instdir/program').glob('lib*.a')))
+                    evidence['core_static_archives']=archives
+                    if archives==0:
+                        failure=('CORE_STATIC_LIBRARIES_MISSING',stage,0)
+                        break
+    except OSError as ex:
+        failure=('BUILD_EXECUTION_ERROR',
+                 evidence['completed_stages'][-1] if evidence['completed_stages'] else 'core_build',
+                 None)
+        evidence['error']=str(ex)
+    evidence['duration_sec']=round(time.monotonic()-start,1)
+    evidence['log_bytes']=log.stat().st_size if log.exists() else 0
+    if log.exists():
+        with log.open('rb') as f:
+            f.seek(max(0,evidence['log_bytes']-8000))
+            evidence['log_tail']=f.read().decode(errors='replace')[-7500:]
+    if failure:
+        status,stage,code=failure
+        evidence.update(status=status,failed_stage=stage,make_exit_code=code,
+                        blockers=[status])
+        return evidence
+    try:
+        evidence['engine']=attest_arm64(source/'android/jniLibs/arm64-v8a/liblo-native-code.so')
+    except ValueError as ex:
+        evidence.update(status='ENGINE_ATTESTATION_FAILED',blockers=[str(ex)])
+        return evidence
+    evidence.update(upstream_apks(source))
+    evidence.update(status='NATIVE_BUILD_ATTESTED',engine_compiled=True)
+    return evidence
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('source',type=Path)
+    p.add_argument('--sdk',type=Path,required=True)
+    p.add_argument('--ndk',type=Path,required=True)
+    p.add_argument('--jobs',type=int,default=3)
+    p.add_argument('--timeout-sec',type=int,default=12600)
+    p.add_argument('--log',type=Path)
+    p.add_argument('--report',type=Path)
+    p.add_argument('--preflight-only',action='store_true')
+    a=p.parse_args()
+    try:
+        data=preflight(a.source,a.sdk,a.ndk) if a.preflight_only else build(
+            a.source,a.sdk,a.ndk,jobs=a.jobs,timeout_sec=a.timeout_sec,log=a.log)
+    except (OSError,ValueError) as e:
+        data={'status':'BLOCKED','blockers':[str(e)],
+              'engine_compiled':False,'formatlab_apk_built':False}
+    rendered=json.dumps(data,indent=2,ensure_ascii=False)
+    if a.report:
+        a.report.parent.mkdir(parents=True,exist_ok=True)
+        a.report.write_text(rendered+'\n',encoding='utf-8')
+    print(rendered)
+    return 0 if data['status'] in ('NATIVE_BUILD_ATTESTED','READY_TO_BUILD') else 2
+
+if __name__=='__main__':sys.exit(main())

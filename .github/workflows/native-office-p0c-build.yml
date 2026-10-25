@@ -1,0 +1,151 @@
+name: FormatLab P0c actual ARM64 LibreOffice native build
+
+on:
+  pull_request:
+    branches:
+      - codex/native-office-configure-p0b-20261025
+    paths:
+      - 'native/office/**'
+      - '.github/workflows/native-office-p0c-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formatlab-p0c-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-arm64-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 245
+    steps:
+      - name: Checkout FormatLab build gate
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 for LibreOffice configure
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Test all native safety and build gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile native/office/*.py
+          (cd native/office && python -m unittest discover -v -p 'test_*.py')
+
+      - name: Install native LibreOffice build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            autoconf automake libtool pkg-config make m4 bison flex gperf xsltproc \
+            libfontconfig-dev libarchive-zip-perl libxml-parser-perl \
+            nasm ninja-build zip unzip ccache \
+            libx11-dev libxext-dev libxrender-dev libfreetype-dev \
+            libxml2-dev libxslt1-dev libpng-dev libjpeg-dev
+          python -c 'import distutils.sysconfig,sysconfig; print(sysconfig.get_config_var("INCLUDEPY"))'
+
+      - name: Android command-line tools
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install exact Android SDK and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'
+          grep -q '^Pkg.Revision = 27.2.12479018$' "$ANDROID_HOME/ndk/27.2.12479018/source.properties"
+
+      - name: Exact pinned full LibreOffice source checkout
+        shell: bash
+        env:
+          UPSTREAM_SHA: f2820323446ae210668dcb6422ddcd55ce939dc2
+        run: |
+          set -euo pipefail
+          SOURCE="$RUNNER_TEMP/formatlab-lo-p0c"
+          mkdir -p "$SOURCE"
+          git -C "$SOURCE" init -q
+          git -C "$SOURCE" remote add origin https://github.com/LibreOffice/core.git
+          git -C "$SOURCE" -c protocol.version=2 fetch --depth=1 --filter=blob:none origin "$UPSTREAM_SHA"
+          git -C "$SOURCE" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$SOURCE" rev-parse HEAD)" = "$UPSTREAM_SHA"
+          echo "FORMATLAB_LO_SOURCE=$SOURCE" >> "$GITHUB_ENV"
+          df -h "$SOURCE"
+
+      - name: Genuine LibreOffice Android ARM64 configure
+        shell: bash
+        env:
+          FORMATLAB_DISPOSABLE_CHECKOUT: YES
+        run: |
+          set -euo pipefail
+          python native/office/configure_probe.py "$FORMATLAB_LO_SOURCE" \
+            --sdk "$ANDROID_HOME" \
+            --ndk "$ANDROID_HOME/ndk/27.2.12479018" \
+            --timeout 600 --min-free-gib 12 \
+            --report "$RUNNER_TEMP/formatlab-p0c-configure.json"
+
+      - name: Actual complete native ARM64 build and binary verification
+        shell: bash
+        env:
+          FORMATLAB_DISPOSABLE_CHECKOUT: YES
+          FORMATLAB_ALLOW_NATIVE_BUILD: YES
+        run: |
+          set -euo pipefail
+          python native/office/p0c_native_build.py "$FORMATLAB_LO_SOURCE" \
+            --sdk "$ANDROID_HOME" --ndk "$ANDROID_HOME/ndk/27.2.12479018" \
+            --jobs 3 --timeout-sec 12600 \
+            --log "$RUNNER_TEMP/formatlab-p0c-make.log" \
+            --report "$RUNNER_TEMP/formatlab-p0c-build.json"
+
+      - name: Stage attested ARM64 native libraries and provenance
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE="$RUNNER_TEMP/formatlab-p0c-qualified"
+          mkdir -p "$BUNDLE/native-libs"
+          cp "$FORMATLAB_LO_SOURCE"/android/jniLibs/arm64-v8a/*.so "$BUNDLE/native-libs/"
+          cp "$RUNNER_TEMP/formatlab-p0c-build.json" "$BUNDLE/build-evidence.json"
+          REF_APK="$FORMATLAB_LO_SOURCE/android/app/build/outputs/apk/strippedUI/debug/LibreOfficeViewer-strippedUI-debug.apk"
+          test -s "$REF_APK"
+          cp "$REF_APK" "$BUNDLE/LibreOfficeViewer-strippedUI-debug.apk"
+          (cd "$BUNDLE" && sha256sum LibreOfficeViewer-strippedUI-debug.apk > reference-apk.sha256)
+          if test -f "$FORMATLAB_LO_SOURCE/LICENSE"; then cp "$FORMATLAB_LO_SOURCE/LICENSE" "$BUNDLE/LibreOffice-LICENSE"; fi
+          if test -f "$FORMATLAB_LO_SOURCE/NOTICE"; then cp "$FORMATLAB_LO_SOURCE/NOTICE" "$BUNDLE/LibreOffice-NOTICE"; fi
+          echo 'Source: LibreOffice/core f2820323446ae210668dcb6422ddcd55ce939dc2' > "$BUNDLE/SOURCE-PROVENANCE.txt"
+          echo 'Build proof only; not an approved FormatLab APK or release.' >> "$BUNDLE/SOURCE-PROVENANCE.txt"
+          du -sh "$BUNDLE"
+
+      - name: Retain ARM64 build evidence for five days
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FormatLab-P0c-arm64-native-proof
+          path: ${{ runner.temp }}/formatlab-p0c-qualified/
+          retention-days: 5
+          if-no-files-found: error
+          compression-level: 6
+      - name: Evidence boundary and short failure diagnostics
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## FormatLab P0c — actual ARM64 build attempt'
+            echo 'Only the individual steps and report determine success.'
+            echo 'FORMATLAB_ANDROID_RUNTIME_INTEGRATED=NO'
+            echo 'FORMATLAB_DOCX_TO_PDF_FIDELITY=NOT_TESTED'
+            echo 'FORMATLAB_ANDROID_NEW_APK_BUILT=NO'
+            echo 'Real-device offline acceptance and distribution license review remain open.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if test -f "$RUNNER_TEMP/formatlab-p0c-build.json"; then
+            cat "$RUNNER_TEMP/formatlab-p0c-build.json"
+          fi
+          if test -f "$RUNNER_TEMP/formatlab-p0c-make.log"; then
+            echo '--- Native make last 100 lines ---'
+            tail -n 100 "$RUNNER_TEMP/formatlab-p0c-make.log"
+          fi
