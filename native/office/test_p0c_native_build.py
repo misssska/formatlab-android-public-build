@@ -11,9 +11,15 @@ class NativeBuildGateTests(unittest.TestCase):
             ('core_build',['make','-j2','build']),
             ('android_link',['make','-j2','android'])])
 
+    def test_three_workers_supported(self):
+        self.assertEqual(build_stages(3)[0][1],['make','-j3','build'])
+
+    def test_four_workers_supported(self):
+        self.assertEqual(build_stages(4)[1][1],['make','-j4','android'])
+
     def test_invalid_parallelism_fails_closed(self):
         with self.assertRaisesRegex(ValueError,'PARALLEL_JOB_LIMIT'):
-            build_stages(4)
+            build_stages(5)
 
     def test_valid_arm64_shared_object(self):
         with tempfile.TemporaryDirectory() as td:

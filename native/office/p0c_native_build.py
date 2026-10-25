@@ -8,6 +8,8 @@ from engine_source_gate import inspect, config_preview
 
 MIN_DISK_GIB=12
 MIN_MEM_GIB=10
+WATCH_MIN_DISK_GIB=5
+WATCH_MIN_MEM_GIB=1.5
 
 def memory_gib(path=Path('/proc/meminfo')):
     try:
@@ -100,16 +102,16 @@ def preflight(source,sdk,ndk,*,disk_gib=None,mem_gib=None,require_approval=True,
 
 def build_stages(jobs):
     """Top-level build must precede the Android target; android alone lacks lib*.a."""
-    if not 1<=jobs<=3:
+    if not 1<=jobs<=4:
         raise ValueError('PARALLEL_JOB_LIMIT')
     return [('core_build',['make',f'-j{jobs}','build']),
             ('android_link',['make',f'-j{jobs}','android'])]
 
 
-def build(source,sdk,ndk,*,jobs=2,timeout_sec=4800,log=None):
+def build(source,sdk,ndk,*,jobs=3,timeout_sec=12600,log=None):
     source=Path(source).resolve()
     stages=build_stages(jobs)
-    if not 120<=timeout_sec<=6000:
+    if not 120<=timeout_sec<=18000:
         raise ValueError('TIMEOUT_OUT_OF_RANGE')
     evidence=preflight(source,sdk,ndk)
     evidence.update(build_attempted=False, build_stages=[stage for stage,_ in stages],
@@ -133,17 +135,38 @@ def build(source,sdk,ndk,*,jobs=2,timeout_sec=4800,log=None):
                 child=subprocess.Popen(argv,cwd=source,
                     stdin=subprocess.DEVNULL,stdout=out,stderr=subprocess.STDOUT,
                     start_new_session=True)
+                code=None
                 try:
-                    code=child.wait(timeout=remaining)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid,signal.SIGTERM)
-                    try: child.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(child.pid,signal.SIGKILL)
-                        child.wait(timeout=10)
-                    code=124
+                    while code is None:
+                        remaining=timeout_sec-(time.monotonic()-start)
+                        if remaining<=0:
+                            code=124
+                            break
+                        try:
+                            code=child.wait(timeout=min(60,remaining))
+                        except subprocess.TimeoutExpired:
+                            free_disk=shutil.disk_usage(source).free/(1024**3)
+                            free_mem=memory_gib()
+                            evidence['watchdog_samples']=evidence.get('watchdog_samples',0)+1
+                            progress={'stage':stage,'elapsed_sec':round(time.monotonic()-start),
+                                      'disk_free_gib':round(free_disk,2),
+                                      'memory_available_gib':round(free_mem,2) if free_mem is not None else None,
+                                      'log_bytes':log.stat().st_size}
+                            evidence['last_watchdog']=progress
+                            print('[P0C_PROGRESS] '+json.dumps(progress),flush=True)
+                            if free_disk<WATCH_MIN_DISK_GIB or (free_mem is not None and free_mem<WATCH_MIN_MEM_GIB):
+                                code=125
+                finally:
+                    if child.poll() is None:
+                        try:os.killpg(child.pid,signal.SIGTERM)
+                        except ProcessLookupError:pass
+                        try:child.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            try:os.killpg(child.pid,signal.SIGKILL)
+                            except ProcessLookupError:pass
+                            child.wait(timeout=10)
                 if code:
-                    failure=('BUILD_TIMEOUT' if code==124 else 'BUILD_FAILED',stage,code)
+                    failure=('BUILD_TIMEOUT' if code==124 else 'BUILD_RESOURCE_WATCHDOG' if code==125 else 'BUILD_FAILED',stage,code)
                     break
                 evidence['completed_stages'].append(stage)
                 if stage=='core_build':
@@ -182,8 +205,8 @@ def main():
     p.add_argument('source',type=Path)
     p.add_argument('--sdk',type=Path,required=True)
     p.add_argument('--ndk',type=Path,required=True)
-    p.add_argument('--jobs',type=int,default=2)
-    p.add_argument('--timeout-sec',type=int,default=4800)
+    p.add_argument('--jobs',type=int,default=3)
+    p.add_argument('--timeout-sec',type=int,default=12600)
     p.add_argument('--log',type=Path)
     p.add_argument('--report',type=Path)
     p.add_argument('--preflight-only',action='store_true')

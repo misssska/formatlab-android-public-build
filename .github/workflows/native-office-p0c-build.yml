@@ -19,7 +19,7 @@ concurrency:
 jobs:
   native-arm64-proof:
     runs-on: ubuntu-24.04
-    timeout-minutes: 110
+    timeout-minutes: 245
     steps:
       - name: Checkout FormatLab build gate
         uses: actions/checkout@v4
@@ -98,10 +98,34 @@ jobs:
           set -euo pipefail
           python native/office/p0c_native_build.py "$FORMATLAB_LO_SOURCE" \
             --sdk "$ANDROID_HOME" --ndk "$ANDROID_HOME/ndk/27.2.12479018" \
-            --jobs 2 --timeout-sec 4800 \
+            --jobs 3 --timeout-sec 12600 \
             --log "$RUNNER_TEMP/formatlab-p0c-make.log" \
             --report "$RUNNER_TEMP/formatlab-p0c-build.json"
 
+      - name: Stage attested ARM64 native libraries and provenance
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE="$RUNNER_TEMP/formatlab-p0c-qualified"
+          mkdir -p "$BUNDLE/native-libs"
+          cp "$FORMATLAB_LO_SOURCE"/android/jniLibs/arm64-v8a/*.so "$BUNDLE/native-libs/"
+          cp "$RUNNER_TEMP/formatlab-p0c-build.json" "$BUNDLE/build-evidence.json"
+          if test -f "$FORMATLAB_LO_SOURCE/LICENSE"; then cp "$FORMATLAB_LO_SOURCE/LICENSE" "$BUNDLE/LibreOffice-LICENSE"; fi
+          if test -f "$FORMATLAB_LO_SOURCE/NOTICE"; then cp "$FORMATLAB_LO_SOURCE/NOTICE" "$BUNDLE/LibreOffice-NOTICE"; fi
+          echo 'Source: LibreOffice/core f2820323446ae210668dcb6422ddcd55ce939dc2' > "$BUNDLE/SOURCE-PROVENANCE.txt"
+          echo 'Build proof only; not an approved FormatLab APK or release.' >> "$BUNDLE/SOURCE-PROVENANCE.txt"
+          du -sh "$BUNDLE"
+
+      - name: Retain ARM64 build evidence for five days
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FormatLab-P0c-arm64-native-proof
+          path: ${{ runner.temp }}/formatlab-p0c-qualified/
+          retention-days: 5
+          if-no-files-found: error
+          compression-level: 6
       - name: Evidence boundary and short failure diagnostics
         if: always()
         shell: bash

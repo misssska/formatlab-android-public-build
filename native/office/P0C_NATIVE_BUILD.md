@@ -15,7 +15,7 @@ Stacked prerequisites:
 2. Installs the real Android SDK 35 and pinned NDK `27.2.12479018`.
 3. Checks out the complete pinned LibreOffice/core source at `f2820323446ae210668dcb6422ddcd55ce939dc2`.
 4. Runs real Android ARM64 `perl autogen.sh` with the previously verified configuration.
-5. With two build jobs, first attempts **`make -j2 build`** to build LibreOffice core and static archives, then **`make -j2 android`** for the native Android link, sharing one 4,800-second budget. The complete runner is limited to 110 minutes.
+5. With three build jobs, first attempts **`make -j3 build`** and then **`make -j3 android`**, sharing a 12,600-second (210-minute) budget with a 245-minute runner cap and minute-level memory, disk and progress monitoring.
 6. Accepts a native engine build only when make exits 0 AND `android/jniLibs/arm64-v8a/liblo-native-code.so` is a nonempty ELF64 little-endian AArch64 shared library.
 7. Records the make log tail, resource checks and any failure reason. Any absence/timeout/missing library is an explicit failure.
 
@@ -69,3 +69,9 @@ python3 native/office/p0c_native_build.py "$RUNNER_TEMP/formatlab-lo-p0c" \
 The first full run [40178229656](https://github.com/misssska/formatlab-android-public-build/actions/runs/40178229656) reached native build but failed because invoking `make android` **without first building LibreOffice core** left `instdir/program/lib*.a` absent. Upstream's `android/Bootstrap/Makefile.shared` consumes static archives at link time. P0c now executes top-level `make build` first, checks for static archives before the Android link, and records which stage failed. An ELF digest is recorded upon success, but no unreviewed native artifact is published.
 
 **No successful native build or format-preserving DOCX→PDF output is claimed without a completed real build and separate Android acceptance.**
+
+## 2026-10-25 P0c timeout root cause and larger guarded attempt
+
+The previous full native build [40179531402](https://github.com/misssska/formatlab-android-public-build/actions/runs/40179531402) hit the artificial 4,800-second (80-minute) BUILD_TIMEOUT while C++ Writer (`sw`) sources were still compiling; no source compiler error was observed, and no ARM64 engine was produced. This version allows a single 210-minute bounded run with 3 workers and a resource watchdog (5 GiB disk/1.5 GiB available memory emergency thresholds). Success still requires both core and Android-link stages and an attested ARM64 ELF engine.
+
+Only a fully successful build produces a **short-lived 5-day GitHub Actions artifact** containing ARM64 shared libraries, SHA/provenance report and available upstream license/notice files. This is engineering evidence, not a signed FormatLab APK or license approval. The public v0.3 release and main branch remain unchanged. Ephemeral GitHub runners cannot resume interrupted work; a durable approved WSL2/Linux build machine is recommended for iterative builds.
