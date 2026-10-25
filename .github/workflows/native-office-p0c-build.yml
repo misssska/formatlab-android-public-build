@@ -111,6 +111,10 @@ jobs:
           mkdir -p "$BUNDLE/native-libs"
           cp "$FORMATLAB_LO_SOURCE"/android/jniLibs/arm64-v8a/*.so "$BUNDLE/native-libs/"
           cp "$RUNNER_TEMP/formatlab-p0c-build.json" "$BUNDLE/build-evidence.json"
+          REF_APK="$FORMATLAB_LO_SOURCE/android/app/build/outputs/apk/strippedUI/debug/LibreOfficeViewer-strippedUI-debug.apk"
+          test -s "$REF_APK"
+          cp "$REF_APK" "$BUNDLE/LibreOfficeViewer-strippedUI-debug.apk"
+          (cd "$BUNDLE" && sha256sum LibreOfficeViewer-strippedUI-debug.apk > reference-apk.sha256)
           if test -f "$FORMATLAB_LO_SOURCE/LICENSE"; then cp "$FORMATLAB_LO_SOURCE/LICENSE" "$BUNDLE/LibreOffice-LICENSE"; fi
           if test -f "$FORMATLAB_LO_SOURCE/NOTICE"; then cp "$FORMATLAB_LO_SOURCE/NOTICE" "$BUNDLE/LibreOffice-NOTICE"; fi
           echo 'Source: LibreOffice/core f2820323446ae210668dcb6422ddcd55ce939dc2' > "$BUNDLE/SOURCE-PROVENANCE.txt"
