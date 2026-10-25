@@ -14,10 +14,10 @@ import org.libreoffice.kit.LibreOfficeKit;
 import org.libreoffice.kit.Office;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.util.Locale;
 import java.util.HashSet;
@@ -279,12 +279,29 @@ public final class FormatLabOfflineOfficeConverter {
             throw new ConversionException(Status.OUTPUT_INVALID,
                     "PDF missing or outside size limits");
         }
-        try (FileInputStream in = new FileInputStream(file)) {
+        try (RandomAccessFile in = new RandomAccessFile(file, "r")) {
             byte[] header = new byte[5];
-            if (in.read(header) != 5
-                    || header[0] != '%' || header[1] != 'P' || header[2] != 'D'
+            in.readFully(header);
+            if (header[0] != '%' || header[1] != 'P' || header[2] != 'D'
                     || header[3] != 'F' || header[4] != '-') {
                 throw new ConversionException(Status.OUTPUT_INVALID, "Output is not a PDF");
+            }
+            // LibreOffice output must also have an EOF trailer, not only a magic header.
+            long tailStart = Math.max(0L, file.length() - 65536L);
+            in.seek(tailStart);
+            byte[] tail = new byte[(int) (file.length() - tailStart)];
+            in.readFully(tail);
+            boolean hasEof = false;
+            for (int i = tail.length - 5; i >= 0; i--) {
+                if (tail[i] == '%' && tail[i + 1] == '%' && tail[i + 2] == 'E'
+                        && tail[i + 3] == 'O' && tail[i + 4] == 'F') {
+                    hasEof = true;
+                    break;
+                }
+            }
+            if (!hasEof) {
+                throw new ConversionException(Status.OUTPUT_INVALID,
+                        "PDF end marker missing");
             }
         }
     }
