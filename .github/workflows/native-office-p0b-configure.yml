@@ -1,0 +1,99 @@
+name: FormatLab P0b real LibreOffice ARM64 configure
+
+on:
+  pull_request:
+    branches:
+      - main
+      - codex/native-office-arm64-p0a-20261025
+    paths:
+      - 'native/office/**'
+      - '.github/workflows/native-office-p0b-configure.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  configure-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout test scripts (no Android APK changes)
+        uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Static checks and fail-closed tests
+        run: |
+          set -euo pipefail
+          python -m py_compile native/office/configure_probe.py native/office/test_configure_probe.py
+          (cd native/office && python -m unittest -v test_configure_probe.py)
+
+      - name: Install minimal host configure prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            autoconf automake libtool pkg-config make m4 bison flex gperf xsltproc
+
+      - name: Android SDK and pinned NDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install Android SDK 35 and NDK 27.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'
+
+      - name: Verify exact full upstream LibreOffice source checkout
+        shell: bash
+        env:
+          UPSTREAM_SHA: f2820323446ae210668dcb6422ddcd55ce939dc2
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/formatlab-lo-p0b"
+          mkdir -p "$ROOT"
+          git -C "$ROOT" init -q
+          git -C "$ROOT" remote add origin https://github.com/LibreOffice/core.git
+          git -C "$ROOT" -c protocol.version=2 fetch --depth=1 --filter=blob:none origin "$UPSTREAM_SHA"
+          git -C "$ROOT" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$ROOT" rev-parse HEAD)" = "$UPSTREAM_SHA"
+          echo "FORMATLAB_LO_SRC=$ROOT" >> "$GITHUB_ENV"
+          git -C "$ROOT" status --short
+          df -h "$ROOT"
+
+      - name: Run bounded genuine LibreOffice Android configure
+        shell: bash
+        env:
+          FORMATLAB_DISPOSABLE_CHECKOUT: YES
+        run: |
+          set -euo pipefail
+          python native/office/configure_probe.py "$FORMATLAB_LO_SRC" \
+            --sdk "$ANDROID_HOME" \
+            --ndk "$ANDROID_HOME/ndk/27.2.12479018" \
+            --timeout 600 \
+            --min-free-gib 8 \
+            --report "$RUNNER_TEMP/formatlab-p0b-configure-report.json"
+
+      - name: Print CI qualification boundary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## P0b native Office configuration'
+            echo 'A successful configure is NOT a compiled LibreOfficeKit library.'
+            echo 'LIBREOFFICEKIT_ENGINE_BUILT=NO'
+            echo 'OFFLINE_DOCX_TO_PDF_QUALITY=NOT_TESTED'
+            echo 'ANDROID_APK_BUILT=NO'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if test -f "$RUNNER_TEMP/formatlab-p0b-configure-report.json"; then
+            cat "$RUNNER_TEMP/formatlab-p0b-configure-report.json"
+          else
+            echo 'Configure did not reach probe/report stage.'
+          fi
