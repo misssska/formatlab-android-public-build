@@ -1,0 +1,93 @@
+name: FormatLab P0g isolated Office Android compilation
+on:
+  pull_request:
+    branches: [codex/offline-office-runtime-p0f-20261025]
+    paths:
+      - 'native/office/**'
+      - '.github/workflows/native-office-isolated-runtime.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: formatlab-p0g-isolated-runtime
+  cancel-in-progress: true
+jobs:
+  compile-original-android-with-isolated-office:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+      - name: Install Android platform 35
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Fetch precisely pinned upstream LibreOfficeKit Android API
+        shell: bash
+        run: |
+          set -euo pipefail
+          UPSTREAM_SHA=f2820323446ae210668dcb6422ddcd55ce939dc2
+          DIR="$RUNNER_TEMP/formatlab-lo-api"
+          mkdir -p "$DIR"
+          git -C "$DIR" init -q
+          git -C "$DIR" remote add origin https://github.com/LibreOffice/core.git
+          git -C "$DIR" sparse-checkout init --cone
+          git -C "$DIR" sparse-checkout set android/Bootstrap/src/org/libreoffice/kit
+          git -C "$DIR" -c protocol.version=2 fetch --depth=1 --filter=blob:none origin "$UPSTREAM_SHA"
+          git -C "$DIR" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$DIR" rev-parse HEAD)" = "$UPSTREAM_SHA"
+          echo "FORMATLAB_LO_API=$DIR" >> "$GITHUB_ENV"
+      - name: Assemble original v0.3 and isolated Office runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '04694a0afbc26ebcbe7dd0c4c265d656acc05497d6d5765980c22e4366c0123b  FormatLab-Android-v0.3-offline-source.zip' | sha256sum -c -
+          python3 native/office/assemble_runtime_overlay.py \
+            --source-zip FormatLab-Android-v0.3-offline-source.zip \
+            --upstream "$FORMATLAB_LO_API" \
+            --overlay native/office/android/hu/formatlab/android \
+            --output "$RUNNER_TEMP/formatlab-android-isolated"
+      - name: Validate existing FormatLab conversion/source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/formatlab-android-isolated"
+          python3 scripts/audit_public_source.py
+          python3 scripts/verify_android.py
+          python3 scripts/test_offline_surface.py
+          node scripts/test_js_bridge.js
+          node scripts/test_offline_algorithms.js
+      - name: Compile actual Android app and verify service process
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/formatlab-android-isolated"
+          gradle --no-daemon :app:assembleDebug
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          "$AAPT" dump badging "$APK" | grep "package: name='hu.formatlab.android'"
+          ! "$AAPT" dump permissions "$APK" | grep -q 'uses-permission'
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > "$RUNNER_TEMP/formatlab-compiled-manifest.txt"
+          grep -F 'FormatLabOfficeService' "$RUNNER_TEMP/formatlab-compiled-manifest.txt"
+          grep -F ':office' "$RUNNER_TEMP/formatlab-compiled-manifest.txt"
+          echo 'ISOLATED_SERVICE_SOURCE_COMPILED=YES; NATIVE_ENGINE_BUNDLED=NO'
+      - name: Explicit evidence boundary
+        if: always()
+        run: |
+          {
+            echo '## FormatLab P0g isolated runtime proof'
+            echo 'Original FormatLab v0.3 source compiles with separate-process Office service and pinned Context adapter.'
+            echo 'Office engine and bootstrap native shared libraries not included in this validation.'
+            echo 'JNI_EXERCISED=NO; AIRPLANE_MODE_DOCX_TO_PDF=NOT_TESTED; RELEASE=NO'
+          } >> "$GITHUB_STEP_SUMMARY"
