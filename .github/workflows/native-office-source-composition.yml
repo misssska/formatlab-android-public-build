@@ -1,0 +1,39 @@
+name: FormatLab P0g native assets and APK source integration gate
+on:
+  pull_request:
+    branches: [codex/offline-office-runtime-p0f-20261025]
+    paths:
+      - 'native/office/**'
+      - '.github/workflows/native-office-source-composition.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  strict-compose-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout existing FormatLab source and validation code
+        uses: actions/checkout@v4
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax and full combined offline-native safety tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile native/office/assemble_runtime_overlay.py native/office/compose_native_office.py native/office/test_compose_native_office.py
+          (cd native/office && python -m unittest -v test_assemble_runtime_overlay.py test_offline_apk_gate.py test_compose_native_office.py)
+      - name: Verify no pretend native binary or release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -f native/office/liblo-native-code.so
+          echo 'P0g source-composition contract PASS: real ARM64 engine still prerequisite.'
+          {
+            echo '## P0g native Office package composition contract'
+            echo 'Synthetic security tests only. No actual LibreOfficeKit engine is bundled.'
+            echo 'No FormatLab APK was built or published by this workflow.'
+            echo 'Requires qualified P0c binary, full upstream reference APK and handset acceptance.'
+          } >> "$GITHUB_STEP_SUMMARY"
