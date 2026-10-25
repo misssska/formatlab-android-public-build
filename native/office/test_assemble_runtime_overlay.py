@@ -1,0 +1,103 @@
+"""Safe source-overlay tests; no Android SDK or real native library needed."""
+from __future__ import annotations
+import hashlib,tempfile,unittest,zipfile
+from pathlib import Path
+from unittest.mock import patch
+from assemble_runtime_overlay import assemble,verify_archive,GateError,PINNED_KIT,SOURCE_UPSTREAM,ROOT
+
+class RuntimeOverlayTests(unittest.TestCase):
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir=Path(tmp.name)
+        self.archive=self.dir/'v03.zip'
+        self.upstream=self.dir/'upstream'
+        self.overlay=self.dir/'overlay'
+        self.overlay.mkdir()
+        self.out=self.dir/'out'
+        (self.overlay/'FormatLabOfflineOfficeConverter.java').write_text(
+            'package hu.formatlab.android; class FormatLabOfflineOfficeConverter {}\n')
+        for name in PINNED_KIT:
+            p=self.upstream/SOURCE_UPSTREAM/name
+            p.parent.mkdir(parents=True,exist_ok=True)
+            p.write_text('package org.libreoffice.kit; class '+name[:-5]+' {}\n')
+
+    def fixture(self,*,bad_internet=False,bad_main=False,duplicate=False,traversal=False):
+        src={
+            f'{ROOT}/app/build.gradle':'plugins { id "com.android.application" }',
+            f'{ROOT}/app/src/main/java/hu/formatlab/android/MainActivity.java':
+                'package wrong.pkg;' if bad_main else 'package hu.formatlab.android; class MainActivity {}',
+            f'{ROOT}/app/src/main/AndroidManifest.xml':
+                '<manifest android.permission.INTERNET="true"/>'
+                if bad_internet else '<manifest package="hu.formatlab.android"/>'
+        }
+        if traversal:src[f'{ROOT}/../injected.txt']='escape'
+        with zipfile.ZipFile(self.archive,'w') as z:
+            for k,v in src.items():z.writestr(k,v)
+            if duplicate:z.writestr(f'{ROOT}/app/build.gradle','duplicate')
+        return hashlib.sha256(self.archive.read_bytes()).hexdigest()
+
+    def test_happy_overlay_reports_not_native(self):
+        sha=self.fixture()
+        r=assemble(self.archive,self.upstream,self.overlay,self.out,expected_sha=sha)
+        self.assertEqual(r['status'],'SOURCE_OVERLAY_ASSEMBLED')
+        self.assertFalse(r['native_lib_bundled'])
+        self.assertFalse(r['feature_exposed_in_ui'])
+        self.assertEqual(len(r['sources']),len(PINNED_KIT)+1)
+        self.assertTrue((self.out/'FORMATLAB_OFFICE_OVERLAY_EVIDENCE.json').is_file())
+
+    def test_archive_hash_mismatch_fails(self):
+        self.fixture()
+        with self.assertRaisesRegex(GateError,'SHA256'):verify_archive(self.archive)
+
+    def test_traversal_archive_fails(self):
+        sha=self.fixture(traversal=True)
+        with self.assertRaisesRegex(GateError,'UNSAFE_SOURCE_ZIP'):
+            verify_archive(self.archive,expected_sha=sha)
+
+    def test_duplicate_archive_entry_fails(self):
+        sha=self.fixture(duplicate=True)
+        with self.assertRaisesRegex(GateError,'DUPLICATE_SOURCE_ZIP'):
+            verify_archive(self.archive,expected_sha=sha)
+
+    def test_missing_upstream_file_fails_cleanup(self):
+        sha=self.fixture()
+        (self.upstream/SOURCE_UPSTREAM/PINNED_KIT[0]).unlink()
+        with self.assertRaisesRegex(GateError,'UPSTREAM_KIT_SOURCE_MISSING'):
+            assemble(self.archive,self.upstream,self.overlay,self.out,expected_sha=sha)
+        self.assertFalse(self.out.exists())
+
+    def test_internet_permission_fails_cleanup(self):
+        sha=self.fixture(bad_internet=True)
+        with self.assertRaisesRegex(GateError,'INTERNET_PERMISSION_FORBIDDEN'):
+            assemble(self.archive,self.upstream,self.overlay,self.out,expected_sha=sha)
+        self.assertFalse(self.out.exists())
+
+    def test_wrong_main_package_fails(self):
+        sha=self.fixture(bad_main=True)
+        with self.assertRaisesRegex(GateError,'UNEXPECTED_APP_PACKAGE'):
+            assemble(self.archive,self.upstream,self.overlay,self.out,expected_sha=sha)
+
+    def test_existing_output_blocks_without_changes(self):
+        sha=self.fixture()
+        self.out.mkdir()
+        marker=self.out/'keep';marker.write_text('preserved')
+        with self.assertRaisesRegex(GateError,'OUTPUT_MUST_BE_EMPTY'):
+            assemble(self.archive,self.upstream,self.overlay,self.out,expected_sha=sha)
+        self.assertEqual(marker.read_text(),'preserved')
+
+    def test_missing_source_archive_fails(self):
+        with self.assertRaisesRegex(GateError,'SOURCE_ARCHIVE_MISSING'):
+            verify_archive(self.dir/'missing.zip',expected_sha='bad')
+
+    def test_zip_symlink_denied(self):
+        self.fixture()
+        with zipfile.ZipFile(self.archive,'a') as z:
+            i=zipfile.ZipInfo(f'{ROOT}/evil')
+            i.external_attr=(0o120777<<16)
+            z.writestr(i,'link')
+        sha=hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(GateError,'UNSAFE_SOURCE_ZIP'):
+            verify_archive(self.archive,expected_sha=sha)
+
+if __name__=='__main__':unittest.main()
