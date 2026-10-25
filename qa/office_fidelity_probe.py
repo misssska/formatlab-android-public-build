@@ -17,6 +17,9 @@ from zipfile import ZipFile, BadZipFile
 
 W="{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 MAX_BYTES=40*1024*1024
+MAX_DOC_XML_BYTES=12*1024*1024
+MAX_PAGE_RENDER_PIXELS=5_000_000
+MAX_TOTAL_RENDER_PIXELS=60_000_000
 
 def words(s):
     return re.findall(r"[^\W_]+",s.casefold(),re.UNICODE)
@@ -31,9 +34,15 @@ def docx_structure(path):
                 raise ValueError("DOCX resource limit exceeded")
             if any(".." in e.filename.split("/") for e in items):
                 raise ValueError("Unsafe DOCX path")
-            if "word/document.xml" not in z.namelist():
-                raise ValueError("Missing document.xml")
-            root=ET.fromstring(z.read("word/document.xml"))
+            document_parts=[e for e in items if e.filename=="word/document.xml"]
+            if len(document_parts)!=1:
+                raise ValueError("Missing or duplicate document.xml")
+            if document_parts[0].file_size>MAX_DOC_XML_BYTES:
+                raise ValueError("DOCX document XML too large")
+            raw=z.read(document_parts[0])
+            if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+                raise ValueError("DOCX DTD/entity declarations not allowed")
+            root=ET.fromstring(raw)
             fs=[n for n in z.namelist() if n.startswith("word/media/") and not n.endswith("/")]
             fonts=set()
             for node in root.iter(W+"rFonts"):
@@ -72,9 +81,17 @@ def compare_visual(output,reference):
         if len(o)!=len(r): return {"status":"SKIPPED_PAGE_MISMATCH"}
         if len(o)>24: return {"status":"SKIPPED_OVER_24_PAGES"}
         pages=[]
+        total_pixels=0
         for i in range(len(o)):
             if abs(o[i].rect.width-r[i].rect.width)>1 or abs(o[i].rect.height-r[i].rect.height)>1:
                 pages.append({"page":i+1,"status":"PAGE_GEOMETRY_MISMATCH"});continue
+            # Check untrusted page geometry BEFORE bitmap allocation at 72 DPI.
+            width=max(1,int(o[i].rect.width+0.9999))
+            height=max(1,int(o[i].rect.height+0.9999))
+            pixels=width*height
+            if pixels>MAX_PAGE_RENDER_PIXELS or total_pixels+pixels>MAX_TOTAL_RENDER_PIXELS:
+                pages.append({"page":i+1,"status":"SKIPPED_RENDER_PIXEL_LIMIT"});continue
+            total_pixels+=pixels
             a=o[i].get_pixmap(colorspace=fitz.csGRAY,alpha=False)
             b=r[i].get_pixmap(colorspace=fitz.csGRAY,alpha=False)
             if (a.width,a.height)!=(b.width,b.height):
@@ -98,7 +115,14 @@ def audit(src,out,ref=None):
     if d["table_nodes"] and not any(p["drawing_operations"]):
         warnings.append("TABLES_WITH_NO_PDF_VECTOR_DRAWING")
     overlap=sum((Counter(d["words"]) & Counter(p["words"])).values())/max(1,len(d["words"]))
-    if overlap<.92: warnings.append("LOW_TEXT_OVERLAP")
+    # A mostly empty PDF is a failed conversion, not a soft warning.
+    # Leave moderate extractable-text differences for manual review.
+    if d["words"] and overlap<.60:
+        failures.append("SEVERE_TEXT_LOSS")
+    elif d["words"] and overlap<.92:
+        warnings.append("LOW_TEXT_OVERLAP")
+    elif not d["words"]:
+        warnings.append("NO_EXTRACTABLE_SOURCE_TEXT")
     if reference and len(p["fonts"])<len(reference["fonts"]):
         warnings.append("FONT_RESOURCE_REDUCTION")
     for v in (d,p):
