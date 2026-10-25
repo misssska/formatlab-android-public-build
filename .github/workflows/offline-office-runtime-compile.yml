@@ -96,8 +96,10 @@ jobs:
           cd "$RUNNER_TEMP/formatlab-android-with-office-api"
           gradle --no-daemon :app:assembleDebug
           test -s app/build/outputs/apk/debug/app-debug.apk
-          aapt dump badging app/build/outputs/apk/debug/app-debug.apk | grep "package: name='hu.formatlab.android'"
-          ! aapt dump permissions app/build/outputs/apk/debug/app-debug.apk | grep -q 'uses-permission'
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          test -x "$AAPT"
+          "$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk | grep "package: name='hu.formatlab.android'"
+          ! "$AAPT" dump permissions app/build/outputs/apk/debug/app-debug.apk | grep -q 'uses-permission'
           echo 'SOURCE_COMPILATION_PASS; NOT A NATIVE OFFICE ENGINE'
 
       - name: Explicit nonrelease boundary
