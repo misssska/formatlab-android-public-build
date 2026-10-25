@@ -73,6 +73,11 @@ class StaticPackageGateTests(unittest.TestCase):
     def test_path_traversal_archive_entry_rejected(self):
         self.assertIn('UNSAFE_ZIP_ENTRY',scan_entries([zipfile.ZipInfo('../escape')])[1])
 
+    def test_noncanonical_zip_paths_rejected(self):
+        for name in ('assets/a/./b', 'assets/a/.', 'assets/a//b'):
+            with self.subTest(name=name):
+                self.assertIn('UNSAFE_ZIP_ENTRY', scan_entries([zipfile.ZipInfo(name)])[1])
+
     def test_zip_bomb_ratio_rejected(self):
         x=zipfile.ZipInfo('huge');x.file_size=600000;x.compress_size=8
         self.assertIn('ZIP_EXCESSIVE_COMPRESSION_RATIO',scan_entries([x])[1])
