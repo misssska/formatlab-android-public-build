@@ -25,10 +25,16 @@ jobs:
       - name: Checkout test scripts (no Android APK changes)
         uses: actions/checkout@v4
 
-      - name: Python 3.12
+      - name: Python 3.11 (LibreOffice configure compatibility)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
+
+      - name: Verify Python native configure dependencies
+        run: |
+          set -euo pipefail
+          python -c 'import distutils.sysconfig as sc; import sys; print(sys.version, sc.get_python_inc())'
+          test -f "$(python -c 'import sysconfig; print(sysconfig.get_paths()["include"])')/Python.h"
 
       - name: Static checks and fail-closed tests
         run: |
