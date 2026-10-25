@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bounded actual LibreOffice ARM64 build. Does not integrate FormatLab APK."""
 from __future__ import annotations
-import argparse, json, os, shutil, signal, subprocess, sys, time
+import argparse, hashlib, json, os, shutil, signal, subprocess, sys, time
 from pathlib import Path
 from zipfile import ZipFile, BadZipFile
 from engine_source_gate import inspect, config_preview
@@ -45,7 +45,12 @@ def attest_arm64(path, min_bytes=1_000_000):
     machine=int.from_bytes(h[18:20],'little')
     if (typ,machine)!=(3,183):
         raise ValueError('NOT_ARM64_SHARED_OBJECT')
-    return {'status':'PASS','abi':'arm64-v8a','elf_machine':183,'size_bytes':n}
+    digest=hashlib.sha256()
+    with path.open('rb') as f:
+        for chunk in iter(lambda:f.read(1024*1024),b''):
+            digest.update(chunk)
+    return {'status':'PASS','abi':'arm64-v8a','elf_machine':183,
+            'size_bytes':n,'sha256':digest.hexdigest()}
 
 def upstream_apks(source):
     """Upstream LibreOffice APK is NOT a FormatLab app."""
@@ -93,48 +98,80 @@ def preflight(source,sdk,ndk,*,disk_gib=None,mem_gib=None,require_approval=True,
             'pinned_source_commit':src.get('commit'),
             'engine_compiled':False,'formatlab_apk_built':False}
 
+def build_stages(jobs):
+    """Top-level build must precede the Android target; android alone lacks lib*.a."""
+    if not 1<=jobs<=3:
+        raise ValueError('PARALLEL_JOB_LIMIT')
+    return [('core_build',['make',f'-j{jobs}','build']),
+            ('android_link',['make',f'-j{jobs}','android'])]
+
+
 def build(source,sdk,ndk,*,jobs=2,timeout_sec=4800,log=None):
     source=Path(source).resolve()
-    if not 1<=jobs<=3: raise ValueError('PARALLEL_JOB_LIMIT')
-    if not 120<=timeout_sec<=6000: raise ValueError('TIMEOUT_OUT_OF_RANGE')
+    stages=build_stages(jobs)
+    if not 120<=timeout_sec<=6000:
+        raise ValueError('TIMEOUT_OUT_OF_RANGE')
     evidence=preflight(source,sdk,ndk)
-    evidence['build_attempted']=False
-    if evidence['status']!='READY_TO_BUILD': return evidence
+    evidence.update(build_attempted=False, build_stages=[stage for stage,_ in stages],
+                    completed_stages=[])
+    if evidence['status']!='READY_TO_BUILD':
+        return evidence
     log=Path(log or Path(os.environ.get('RUNNER_TEMP','/tmp'))/'formatlab-p0c-make.log')
     log.parent.mkdir(parents=True,exist_ok=True)
-    evidence['build_attempted']=True
     start=time.monotonic()
+    evidence['build_attempted']=True
+    failure=None
     try:
         with log.open('wb') as out:
-            child=subprocess.Popen(['make',f'-j{jobs}','android'],cwd=source,
-                stdin=subprocess.DEVNULL,stdout=out,stderr=subprocess.STDOUT,
-                start_new_session=True)
-            try: code=child.wait(timeout=timeout_sec)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid,signal.SIGTERM)
-                try: child.wait(timeout=10)
+            for stage,argv in stages:
+                remaining=timeout_sec-(time.monotonic()-start)
+                if remaining<=0:
+                    failure=('BUILD_TIMEOUT',stage,124)
+                    break
+                out.write(('\n== FORMATLAB STAGE '+stage+' ==\n').encode())
+                out.flush()
+                child=subprocess.Popen(argv,cwd=source,
+                    stdin=subprocess.DEVNULL,stdout=out,stderr=subprocess.STDOUT,
+                    start_new_session=True)
+                try:
+                    code=child.wait(timeout=remaining)
                 except subprocess.TimeoutExpired:
-                    os.killpg(child.pid,signal.SIGKILL)
-                    child.wait(timeout=10)
-                code=124
-    except OSError as e:
-        evidence.update(status='BUILD_EXECUTION_ERROR',blockers=[str(e)])
-        return evidence
+                    os.killpg(child.pid,signal.SIGTERM)
+                    try: child.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(child.pid,signal.SIGKILL)
+                        child.wait(timeout=10)
+                    code=124
+                if code:
+                    failure=('BUILD_TIMEOUT' if code==124 else 'BUILD_FAILED',stage,code)
+                    break
+                evidence['completed_stages'].append(stage)
+                if stage=='core_build':
+                    archives=len(list((source/'instdir/program').glob('lib*.a')))
+                    evidence['core_static_archives']=archives
+                    if archives==0:
+                        failure=('CORE_STATIC_LIBRARIES_MISSING',stage,0)
+                        break
+    except OSError as ex:
+        failure=('BUILD_EXECUTION_ERROR',
+                 evidence['completed_stages'][-1] if evidence['completed_stages'] else 'core_build',
+                 None)
+        evidence['error']=str(ex)
     evidence['duration_sec']=round(time.monotonic()-start,1)
-    evidence['make_exit_code']=code
-    n=log.stat().st_size
-    with log.open('rb') as f:
-        f.seek(max(0,n-6000))
-        evidence['log_tail']=f.read().decode(errors='replace')[-5500:]
-    evidence['log_bytes']=n
-    if code:
-        evidence.update(status='BUILD_TIMEOUT' if code==124 else 'BUILD_FAILED',
-                        blockers=['MAKE_EXIT_NONZERO'])
+    evidence['log_bytes']=log.stat().st_size if log.exists() else 0
+    if log.exists():
+        with log.open('rb') as f:
+            f.seek(max(0,evidence['log_bytes']-8000))
+            evidence['log_tail']=f.read().decode(errors='replace')[-7500:]
+    if failure:
+        status,stage,code=failure
+        evidence.update(status=status,failed_stage=stage,make_exit_code=code,
+                        blockers=[status])
         return evidence
     try:
         evidence['engine']=attest_arm64(source/'android/jniLibs/arm64-v8a/liblo-native-code.so')
-    except ValueError as e:
-        evidence.update(status='ENGINE_ATTESTATION_FAILED',blockers=[str(e)])
+    except ValueError as ex:
+        evidence.update(status='ENGINE_ATTESTATION_FAILED',blockers=[str(ex)])
         return evidence
     evidence.update(upstream_apks(source))
     evidence.update(status='NATIVE_BUILD_ATTESTED',engine_compiled=True)

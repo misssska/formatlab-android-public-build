@@ -15,7 +15,7 @@ Stacked prerequisites:
 2. Installs the real Android SDK 35 and pinned NDK `27.2.12479018`.
 3. Checks out the complete pinned LibreOffice/core source at `f2820323446ae210668dcb6422ddcd55ce939dc2`.
 4. Runs real Android ARM64 `perl autogen.sh` with the previously verified configuration.
-5. With two build jobs, attempts **`make -j2 android`**, bounded to 4,800 seconds. The complete runner is limited to 110 minutes.
+5. With two build jobs, first attempts **`make -j2 build`** to build LibreOffice core and static archives, then **`make -j2 android`** for the native Android link, sharing one 4,800-second budget. The complete runner is limited to 110 minutes.
 6. Accepts a native engine build only when make exits 0 AND `android/jniLibs/arm64-v8a/liblo-native-code.so` is a nonempty ELF64 little-endian AArch64 shared library.
 7. Records the make log tail, resource checks and any failure reason. Any absence/timeout/missing library is an explicit failure.
 
@@ -29,7 +29,7 @@ No native binaries or upstream APKs are published automatically because legal/li
 |---|---|
 | P0a — compiler | Genuine Android ARM64 shared-library smoke PASS |
 | P0b — configure | Genuine pinned LibreOffice ARM64 autogen, exit 0 |
-| **P0c — native build** | **Real `make android` succeeds + ARM64 `liblo-native-code.so` ELF attestation** |
+| **P0c — native build** | **Real `make build`, static archives and `make android` succeed + ARM64 `liblo-native-code.so` ELF attestation** |
 | P0d — JNI packaging | Offline JNI wrapper, bundled fonts/resources, cancellation, no Internet permission |
 | P0e — document fidelity | Complex synthetic DOCX→PDF preserves images, styled/nested tables, fonts, Unicode, pagination; independent oracle PASS |
 | P0f — device | Real phone, airplane mode, time/RAM/crash/regression benchmarks and license review |
@@ -63,3 +63,9 @@ python3 native/office/p0c_native_build.py "$RUNNER_TEMP/formatlab-lo-p0c" \
 - Actual offline DOCX→PDF export, output and quality comparison, tablet/phone device tests — NOT DONE.
 - Native-library dependencies, source-offer / MPL license notices, fonts and redistribution review — NOT DONE.
 - Preservation of previously working image/ZIP/CSV sharing flows must be retested after integration.
+
+## 2026-10-25 native-build root cause and corrected stage contract
+
+The first full run [40178229656](https://github.com/misssska/formatlab-android-public-build/actions/runs/40178229656) reached native build but failed because invoking `make android` **without first building LibreOffice core** left `instdir/program/lib*.a` absent. Upstream's `android/Bootstrap/Makefile.shared` consumes static archives at link time. P0c now executes top-level `make build` first, checks for static archives before the Android link, and records which stage failed. An ELF digest is recorded upon success, but no unreviewed native artifact is published.
+
+**No successful native build or format-preserving DOCX→PDF output is claimed without a completed real build and separate Android acceptance.**

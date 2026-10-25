@@ -2,14 +2,26 @@
 import os, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
-from p0c_native_build import attest_arm64, preflight, disposable, memory_gib, upstream_apks
+from p0c_native_build import attest_arm64, preflight, disposable, memory_gib, upstream_apks, build_stages
 
 class NativeBuildGateTests(unittest.TestCase):
+    def test_core_build_must_precede_android_link(self):
+        stages=build_stages(2)
+        self.assertEqual(stages,[
+            ('core_build',['make','-j2','build']),
+            ('android_link',['make','-j2','android'])])
+
+    def test_invalid_parallelism_fails_closed(self):
+        with self.assertRaisesRegex(ValueError,'PARALLEL_JOB_LIMIT'):
+            build_stages(4)
+
     def test_valid_arm64_shared_object(self):
         with tempfile.TemporaryDirectory() as td:
             f=Path(td)/'liblo-native-code.so'
             f.write_bytes(b'\x7fELF\x02\x01'+bytes(10)+(3).to_bytes(2,'little')+(183).to_bytes(2,'little')+bytes(80))
-            self.assertEqual(attest_arm64(f,min_bytes=40)['abi'],'arm64-v8a')
+            result=attest_arm64(f,min_bytes=40)
+            self.assertEqual(result['abi'],'arm64-v8a')
+            self.assertEqual(len(result['sha256']),64)
 
     def test_x86_elf_rejected(self):
         with tempfile.TemporaryDirectory() as td:
