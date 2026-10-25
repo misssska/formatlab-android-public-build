@@ -1,0 +1,115 @@
+name: FormatLab offline Office JNI adapter compilation gate
+
+on:
+  pull_request:
+    branches: [codex/native-office-offline-package-p0d-20261025]
+    paths:
+      - 'native/office/android/**'
+      - 'native/office/assemble_runtime_overlay.py'
+      - 'native/office/test_assemble_runtime_overlay.py'
+      - '.github/workflows/offline-office-runtime-compile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formatlab-offline-runtime-compile
+  cancel-in-progress: true
+
+jobs:
+  verify-and-compile-real-v03-with-office-adapter:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout existing v0.3 and overlay code
+        uses: actions/checkout@v4
+
+      - name: Python source overlay security tests
+        run: |
+          set -euo pipefail
+          python3 -m py_compile native/office/assemble_runtime_overlay.py native/office/test_assemble_runtime_overlay.py
+          (cd native/office && python3 -m unittest -v test_assemble_runtime_overlay.py)
+
+      - name: JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Android 35 tools
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Retrieve only pinned upstream LibreOffice Java API
+        shell: bash
+        env:
+          UPSTREAM_SHA: f2820323446ae210668dcb6422ddcd55ce939dc2
+        run: |
+          set -euo pipefail
+          SOURCE="$RUNNER_TEMP/formatlab-lo-api"
+          mkdir -p "$SOURCE"
+          git -C "$SOURCE" init -q
+          git -C "$SOURCE" remote add origin https://github.com/LibreOffice/core.git
+          git -C "$SOURCE" sparse-checkout init --cone
+          git -C "$SOURCE" sparse-checkout set android/Bootstrap/src/org/libreoffice/kit
+          git -C "$SOURCE" -c protocol.version=2 fetch --depth=1 --filter=blob:none origin "$UPSTREAM_SHA"
+          git -C "$SOURCE" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$SOURCE" rev-parse HEAD)" = "$UPSTREAM_SHA"
+          echo "FORMATLAB_LO_API=$SOURCE" >> "$GITHUB_ENV"
+
+      - name: Safely overlay into actual FormatLab v0.3 Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '04694a0afbc26ebcbe7dd0c4c265d656acc05497d6d5765980c22e4366c0123b  FormatLab-Android-v0.3-offline-source.zip' | sha256sum -c -
+          python3 native/office/assemble_runtime_overlay.py \
+            --source-zip FormatLab-Android-v0.3-offline-source.zip \
+            --upstream "$FORMATLAB_LO_API" \
+            --overlay native/office/android/hu/formatlab/android \
+            --output "$RUNNER_TEMP/formatlab-android-with-office-api"
+
+      - name: Existing v0.3 regressions on overlaid project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/formatlab-android-with-office-api"
+          python3 scripts/audit_public_source.py
+          python3 scripts/verify_android.py
+          python3 scripts/test_offline_surface.py
+          node scripts/test_js_bridge.js
+          node scripts/test_offline_algorithms.js
+
+      - name: Compile actual FormatLab Android with native Office API adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/formatlab-android-with-office-api"
+          gradle --no-daemon :app:assembleDebug
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          aapt dump badging app/build/outputs/apk/debug/app-debug.apk | grep "package: name='hu.formatlab.android'"
+          ! aapt dump permissions app/build/outputs/apk/debug/app-debug.apk | grep -q 'uses-permission'
+          echo 'SOURCE_COMPILATION_PASS; NOT A NATIVE OFFICE ENGINE'
+
+      - name: Explicit nonrelease boundary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Offline LibreOfficeKit integration source'
+            echo 'Checks Java adapter against real existing FormatLab v0.3 Android source and pinned upstream Java API.'
+            echo 'No native LibreOfficeKit binary in this build. No actual DOCX->PDF test. Do not publish the resulting APK.'
+            echo 'NATIVE_ENGINE_PRESENT=NO'
+            echo 'OFFLINE_DOCX_PDF=NOT_TESTED'
+            echo 'HANDSET_ACCEPTANCE=NOT_TESTED'
+            echo 'RELEASE_APPROVED=NO'
+          } >> "$GITHUB_STEP_SUMMARY"
