@@ -44,7 +44,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             autoconf automake libtool pkg-config make m4 bison flex gperf xsltproc \
             libfontconfig-dev libarchive-zip-perl libxml-parser-perl \
-            nasm meson ninja-build zip unzip ccache \
+            nasm ninja-build zip unzip ccache \
             libx11-dev libxext-dev libxrender-dev libfreetype-dev \
             libxml2-dev libxslt1-dev libpng-dev libjpeg-dev
           python -c 'import distutils.sysconfig,sysconfig; print(sysconfig.get_config_var("INCLUDEPY"))'
