@@ -1,0 +1,57 @@
+name: FormatLab P0e real offline Office golden corpus
+
+on:
+  pull_request:
+    branches: [main, codex/p0-office-fidelity-gate-20261025]
+    paths:
+      - 'qa/**'
+      - '.github/workflows/offline-office-golden.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-offline-libreoffice-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout source (no private docs)
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install full offline reference prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libreoffice-writer fonts-liberation
+          python -m pip install "PyMuPDF>=1.24,<1.28" \
+            "python-docx>=1.1,<2" "Pillow>=11,<13"
+          libreoffice --version
+
+      - name: Real local LibreOffice conversion and rejection tests
+        run: |
+          set -euo pipefail
+          python -m py_compile qa/offline_reference_suite.py \
+            qa/offline_android_fidelity_acceptance.py qa/test_offline_reference_suite.py
+          python -m unittest discover -s qa -p 'test_offline_reference_suite.py' -v
+          python qa/offline_reference_suite.py \
+            --output "$RUNNER_TEMP/formatlab-offline-golden" \
+            --soffice "$(command -v libreoffice)"
+          python -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"formatlab-offline-golden/suite-report.json"; r=json.loads(p.read_text()); assert r["status"]=="REFERENCE_PASS"; assert len(r["cases"])==5; print("5/5 real LibreOffice references PASS")'
+
+      - name: Explicit evidence boundary
+        if: always()
+        run: |
+          {
+            echo '## Offline synthetic golden suite'
+            echo 'LOCAL_LIBREOFFICE_REFERENCE_ONLY'
+            echo 'FORMATLAB_NATIVE_ANDROID_DOCX_TO_PDF=NOT_TESTED'
+            echo 'AIRPLANE_MODE_HANDSET=NOT_TESTED'
+            echo 'NEVER_CLAIM_PRODUCTION_FIDELITY_FROM_SYNTHETIC_REFERENCE'
+          } >> "$GITHUB_STEP_SUMMARY"
