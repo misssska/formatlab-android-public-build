@@ -71,6 +71,26 @@ class RuntimeOverlayTests(unittest.TestCase):
             assemble(self.archive,self.upstream,self.overlay,self.out,expected_sha=sha)
         self.assertFalse(self.out.exists())
 
+    def test_upstream_symlink_java_source_rejected(self):
+        sha = self.fixture()
+        src = self.upstream/SOURCE_UPSTREAM/PINNED_KIT[0]
+        target = self.dir/'saved-upstream.java'
+        src.rename(target)
+        src.symlink_to(target)
+        with self.assertRaisesRegex(GateError, 'UPSTREAM_KIT_SOURCE_MISSING'):
+            assemble(self.archive, self.upstream, self.overlay, self.out, expected_sha=sha)
+        self.assertFalse(self.out.exists())
+
+    def test_overlay_symlink_java_source_rejected(self):
+        sha = self.fixture()
+        src = self.overlay/'FormatLabOfficeService.java'
+        target = self.dir/'saved-overlay.java'
+        src.rename(target)
+        src.symlink_to(target)
+        with self.assertRaisesRegex(GateError, 'OVERLAY_SOURCE_MISSING'):
+            assemble(self.archive, self.upstream, self.overlay, self.out, expected_sha=sha)
+        self.assertFalse(self.out.exists())
+
     def test_missing_service_source_blocks(self):
         sha=self.fixture()
         (self.overlay/'FormatLabOfficeService.java').unlink()
