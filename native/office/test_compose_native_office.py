@@ -26,7 +26,14 @@ class NativePackageComposerTests(unittest.TestCase):
         for name in PINNED_KIT:
             f=self.upstream/SOURCE_UPSTREAM/name
             f.parent.mkdir(parents=True,exist_ok=True)
-            f.write_text('package org.libreoffice.kit; class '+name[:-5]+' {}')
+            if name=='LibreOfficeKit.java':
+                f.write_text(
+                    'package org.libreoffice.kit; import android.app.Activity; '
+                    'class LibreOfficeKit { void init(Activity activity) { '
+                    'activity.getApplication().getCacheDir(); '
+                    'activity.getApplication().getPackageResourcePath(); } }')
+            else:
+                f.write_text('package org.libreoffice.kit; class '+name[:-5]+' {}')
         (self.overlay/'FormatLabOfflineOfficeConverter.java').write_text(
             'package hu.formatlab.android; class FormatLabOfflineOfficeConverter {}')
         with zipfile.ZipFile(self.zip,'w',compression=zipfile.ZIP_STORED) as z:
