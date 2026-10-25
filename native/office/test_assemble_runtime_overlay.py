@@ -119,6 +119,14 @@ class RuntimeOverlayTests(unittest.TestCase):
         with self.assertRaisesRegex(GateError,'DUPLICATE_SOURCE_ZIP'):
             verify_archive(self.archive,expected_sha=sha)
 
+    def test_normalized_source_zip_path_rejected(self):
+        self.fixture()
+        with zipfile.ZipFile(self.archive, 'a') as z:
+            z.writestr(f'{ROOT}/app/./extra.txt', 'alias')
+        sha = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(GateError, 'UNSAFE_SOURCE_ZIP'):
+            verify_archive(self.archive, expected_sha=sha)
+
     def test_missing_upstream_file_fails_cleanup(self):
         sha=self.fixture()
         (self.upstream/SOURCE_UPSTREAM/PINNED_KIT[0]).unlink()
