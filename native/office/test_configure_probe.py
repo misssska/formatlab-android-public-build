@@ -78,7 +78,7 @@ class ConfigureProbeTests(unittest.TestCase):
             r = run_probe(self.source, self.sdk, self.ndk, runner=fake_run)
         self.assertEqual(r["status"], "CONFIGURED_ONLY")
         self.assertTrue((self.source/"autogen.input").exists())
-        self.assertEqual(called[0][0], ["./autogen.sh"])
+        self.assertEqual(called[0][0], ["perl", "autogen.sh"])
         self.assertFalse(r["office_engine_built"])
         self.assertFalse(r["android_apk_built"])
 
