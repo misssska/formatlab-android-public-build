@@ -20,7 +20,7 @@ P0 sample: reference DOCX rendered as 8 pages by LibreOffice; v0.3 PDF has 10. S
 - [x] Identify root cause and objective regression metrics.
 - [x] Produce **private, local** reproducible image/page/font report.
 - [x] Produce synthetic test suite for quality detector; local results: four unittest PASS, user's current v0.3 output FAIL for missing media/page discrepancy. Test suite artifact prepared independently.
-- [ ] Check in independently runnable quality tests to repository, run public CI without using private test data.
+- [x] Check in independently runnable synthetic quality tests to repository; previously run in public CI on main. The strengthened gate in this branch still requires its own PR CI acceptance.
 - [ ] Build liblo native engine arm64-v8a, pin exact versions and license notices, and embed within FormatLab.
 - [ ] Validate DOCX->PDF with synthetic rich DOCX on real Android in airplane mode; no watermark.
 - [ ] Privately compare user benchmark, including 8 pages, all images, table geometry/colors, fonts and footnotes; do not upload user assets publicly.
@@ -34,3 +34,11 @@ P0 sample: reference DOCX rendered as 8 pages by LibreOffice; v0.3 PDF has 10. S
 - https://docs.aspose.com/words/java/aspose-words-for-android-via-java-supported-platforms/
 - https://docs.aspose.com/words/java/licensing/
 - https://forum.aspose.com/t/license-for-offline-use/328937
+
+## 2026-10-25 P0 diagnostic hardening (PR, not native engine)
+
+- Fail-closed for severe text loss (<60% of source words found in extracted PDF text); warnings remain for 60–92% coverage.
+- Bound document.xml XML size, reject duplicate document.xml entries and DTD/entity declarations in diagnostic input.
+- Bound reference raster comparisons so oversized PDF pages do not exhaust memory; skips are *not* passes.
+- Add synthetic regression tests and run them in pull requests before merge.
+- **Native offline LibreOfficeKit integration, real Android DOCX->PDF fidelity, and device acceptance remain blocked.**
