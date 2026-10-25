@@ -6,6 +6,11 @@ on:
     paths:
       - 'qa/**'
       - '.github/workflows/office-quality-gate.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'qa/**'
+      - '.github/workflows/office-quality-gate.yml'
   workflow_dispatch:
 
 permissions:
