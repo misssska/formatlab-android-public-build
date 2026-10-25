@@ -46,6 +46,7 @@ public final class FormatLabOfflineOfficeConverter {
     private static final Object NATIVE_LOCK = new Object();
     private static Office sharedOffice = null;
     private static final int MAX_ZIP_ENTRIES = 2048;
+    private static final long TEMP_RETENTION_MS = 24L * 60L * 60L * 1000L;
     private static final long MAX_DOC_XML_BYTES = 12L * 1024L * 1024L;
     private static final long MAX_TOTAL_UNCOMPRESSED = 200L * 1024L * 1024L;
     private static final String[] REQUIRED_NATIVE_LIBS = {
@@ -144,6 +145,7 @@ public final class FormatLabOfflineOfficeConverter {
                 if (!workDir.isDirectory() && !workDir.mkdirs()) {
                     throw new IOException("Cannot allocate private office directory");
                 }
+                cleanupStaleTempFiles(workDir);
                 inputFile = File.createTempFile("office-in-", INPUT_EXTENSION, workDir);
                 outputFile = File.createTempFile("office-out-", OUTPUT_EXTENSION, workDir);
                 // Delete an empty placeholder: native saveAs creates the output itself.
@@ -181,6 +183,22 @@ public final class FormatLabOfflineOfficeConverter {
             } finally {
                 if (inputFile != null) inputFile.delete();
                 if (!success && outputFile != null) outputFile.delete();
+            }
+        }
+    }
+
+    /** Remove only old, known temporary files; never touch an active output. */
+    private static void cleanupStaleTempFiles(File workDir) {
+        File[] files = workDir.listFiles();
+        if (files == null) return;
+        long cutoff = System.currentTimeMillis() - TEMP_RETENTION_MS;
+        for (File candidate : files) {
+            String name = candidate.getName();
+            boolean knownInput = name.startsWith("office-in-") && name.endsWith(INPUT_EXTENSION);
+            boolean knownOutput = name.startsWith("office-out-") && name.endsWith(OUTPUT_EXTENSION);
+            if ((knownInput || knownOutput) && candidate.isFile()
+                    && candidate.lastModified() > 0 && candidate.lastModified() < cutoff) {
+                if (!candidate.delete()) Log.w(TAG, "Stale office cache cleanup failed");
             }
         }
     }
