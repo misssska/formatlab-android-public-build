@@ -34,8 +34,10 @@ class NativePackageComposerTests(unittest.TestCase):
                     'activity.getApplication().getPackageResourcePath(); } }')
             else:
                 f.write_text('package org.libreoffice.kit; class '+name[:-5]+' {}')
-        (self.overlay/'FormatLabOfflineOfficeConverter.java').write_text(
-            'package hu.formatlab.android; class FormatLabOfflineOfficeConverter {}')
+        for name in ('FormatLabOfflineOfficeConverter.java',
+                     'FormatLabOfficeService.java','FormatLabOfficeProcessClient.java'):
+            (self.overlay/name).write_text(
+                'package hu.formatlab.android; class '+name[:-5]+' {}')
         with zipfile.ZipFile(self.zip,'w',compression=zipfile.ZIP_STORED) as z:
             z.writestr(ROOT+'/app/build.gradle','plugins {}')
             z.writestr(ROOT+'/app/src/main/java/hu/formatlab/android/MainActivity.java',
