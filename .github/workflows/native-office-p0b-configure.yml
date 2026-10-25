@@ -10,6 +10,10 @@ on:
       - '.github/workflows/native-office-p0b-configure.yml'
   workflow_dispatch:
 
+concurrency:
+  group: formatlab-p0b-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
