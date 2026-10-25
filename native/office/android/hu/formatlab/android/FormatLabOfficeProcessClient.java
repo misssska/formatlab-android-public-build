@@ -25,12 +25,16 @@ public final class FormatLabOfficeProcessClient implements AutoCloseable {
         void onError(String status);
     }
 
+    private static final long CLIENT_TIMEOUT_MS =
+            (FormatLabOfficeService.MAX_SECONDS + 20L) * 1000L;
+
     private final Context context;
     private final Uri source;
     private final Callback callback;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Messenger inbound = new Messenger(new Handler(Looper.getMainLooper(),
             this::onWorkerMessage));
+    private final Runnable timeout = () -> fail("OFFICE_CLIENT_TIMEOUT");
     private boolean bound = false;
     private boolean finished = false;
 
@@ -77,7 +81,12 @@ public final class FormatLabOfficeProcessClient implements AutoCloseable {
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         intent.setData(source);
         bound = context.bindService(intent, connection, Context.BIND_AUTO_CREATE);
-        if (!bound) fail("OFFICE_BIND_FAILED");
+        if (!bound) {
+            fail("OFFICE_BIND_FAILED");
+        } else {
+            // A dead or non-responsive service must never strand the UI.
+            main.postDelayed(timeout, CLIENT_TIMEOUT_MS);
+        }
     }
 
     private boolean onWorkerMessage(Message response) {
@@ -118,6 +127,7 @@ public final class FormatLabOfficeProcessClient implements AutoCloseable {
     private void finish() {
         if (finished) return;
         finished = true;
+        main.removeCallbacks(timeout);
         if (bound) {
             context.unbindService(connection);
             bound = false;
