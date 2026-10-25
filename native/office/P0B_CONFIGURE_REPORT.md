@@ -15,7 +15,7 @@
 2. Installs minimal build-host configure dependencies, Android SDK 35 and exact Android NDK 27.2.
 3. Fetches and checks out the complete exact upstream source revision in an ephemeral GitHub runner directory (no source edits committed).
 4. Checks available free disk (8 GiB before configuring), pin, host toolchain and SDK.
-5. Opts into writing `autogen.input` **only in the disposable checkout**, invokes `./autogen.sh` with 600-second timeout, records blocked/missing requirements.
+5. Opts into writing `autogen.input` **only in the disposable checkout**, invokes `perl autogen.sh` (upstream Perl/sh polyglot) with 600-second timeout, records blocked/missing requirements.
 6. Marks the workflow as failed if the configure step did not complete successfully. The report deliberately records that no engine/APK was built.
 
 Commands to reproduce on a sufficiently provisioned disposable Linux / WSL2 build host:
