@@ -1,0 +1,37 @@
+name: FormatLab P0d offline APK package gate
+on:
+  pull_request:
+    branches:
+      - codex/native-office-full-build-p0c-20261025
+    paths:
+      - 'native/office/offline_apk_gate.py'
+      - 'native/office/test_offline_apk_gate.py'
+      - '.github/workflows/native-office-package-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-apk-package-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout package gate
+        uses: actions/checkout@v4
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fail-closed package tests
+        run: |
+          set -euo pipefail
+          python -m py_compile native/office/offline_apk_gate.py native/office/test_offline_apk_gate.py
+          python -m unittest discover -s native/office -p 'test_offline_apk_gate.py' -v
+      - name: Evidence boundary
+        run: |
+          {
+            echo '## Offline APK static package gate'
+            echo 'Synthetic tests only. No runtime engine or integrated FormatLab APK here.'
+            echo 'NATIVE_ENGINE_PACKAGED=NOT_TESTED'
+            echo 'OFFLINE_DOCX_PDF_FIDELITY=NOT_TESTED'
+            echo 'REAL_ANDROID_DEVICE=NOT_TESTED'
+          } >> "$GITHUB_STEP_SUMMARY"
