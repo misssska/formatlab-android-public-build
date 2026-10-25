@@ -42,7 +42,7 @@ def scan_entries(infos:list[zipfile.ZipInfo])->tuple[set[str],list[str]]:
     for info in infos:
         path=info.filename
         p=PurePosixPath(path)
-        if (path.startswith('/') or '\\' in path or '\x00' in path
+        if (path.rstrip('/') != str(p) or path.startswith('/') or '\\' in path or '\x00' in path
                 or '//' in path or '/./' in path or path.startswith('./')
                 or any(x in ('..','') for x in p.parts)):
             failures.append('UNSAFE_ZIP_ENTRY')
