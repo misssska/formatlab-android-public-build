@@ -97,6 +97,14 @@ class RuntimeOverlayTests(unittest.TestCase):
         self.assertIn("tail[i + 4] == 'F'", converter)
         self.assertIn('MAX_PDF_BYTES', converter)
 
+    def test_stale_private_cache_cleanup_is_narrowly_scoped(self):
+        converter = (Path(__file__).parent/'android/hu/formatlab/android/FormatLabOfflineOfficeConverter.java').read_text()
+        self.assertIn('TEMP_RETENTION_MS = 24L * 60L * 60L * 1000L', converter)
+        self.assertIn('cleanupStaleTempFiles(workDir)', converter)
+        self.assertIn('name.startsWith("office-in-")', converter)
+        self.assertIn('name.startsWith("office-out-")', converter)
+        self.assertIn('candidate.lastModified() < cutoff', converter)
+
     def test_archive_hash_mismatch_fails(self):
         self.fixture()
         with self.assertRaisesRegex(GateError,'SHA256'):verify_archive(self.archive)
