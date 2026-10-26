@@ -1,0 +1,149 @@
+name: FormatLab P0g native assets and APK source integration gate
+on:
+  pull_request:
+    branches: [codex/offline-office-runtime-p0f-20261025]
+    paths:
+      - 'native/office/**'
+      - '.github/workflows/native-office-source-composition.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  strict-compose-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout existing FormatLab source and validation code
+        uses: actions/checkout@v4
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax and full combined offline-native safety tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile native/office/assemble_runtime_overlay.py native/office/compose_native_office.py native/office/test_compose_native_office.py
+          (cd native/office && python -m unittest -v test_assemble_runtime_overlay.py test_offline_apk_gate.py test_compose_native_office.py)
+      - name: Verify no pretend native binary or release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -f native/office/liblo-native-code.so
+          echo 'P0g source-composition contract PASS: real ARM64 engine still prerequisite.'
+          {
+            echo '## P0g native Office package composition contract'
+            echo 'Synthetic security tests only. No actual LibreOfficeKit engine is bundled.'
+            echo 'No FormatLab APK was built or published by this workflow.'
+            echo 'Requires qualified P0c binary, full upstream reference APK and handset acceptance.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  actual-p0c6-native-candidate:
+    name: Real P0c #6 native engine and FormatLab APK static acceptance (no release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Checkout validated FormatLab P0g
+        uses: actions/checkout@v4
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+      - name: Android platform 35
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Download pinned successful P0c #6 native build evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: FormatLab-P0c-arm64-native-proof
+          run-id: 40214977279
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/formatlab-p0c6
+      - name: Verify native source, reference APK, all 14 library hashes and ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/formatlab-p0c6"
+          test -s "$ROOT/LibreOfficeViewer-strippedUI-debug.apk"
+          test -s "$ROOT/build-evidence.json"
+          (cd "$ROOT" && sha256sum -c reference-apk.sha256)
+          echo '55cfc20f23f3cd0f65dc78c2dd92c6a0db8d38844e903ac7f42ac4b29a6f6e18  '"$ROOT/LibreOfficeViewer-strippedUI-debug.apk" | sha256sum -c -
+          test "$(find "$ROOT/native-libs" -maxdepth 1 -type f -name '*.so' | wc -l)" -eq 14
+          (cd native/office && python3 -c 'from pathlib import Path; from compose_native_office import qualify_bundle; import os; p=Path(os.environ["RUNNER_TEMP"])/"formatlab-p0c6"; r=qualify_bundle(p/"LibreOfficeViewer-strippedUI-debug.apk",p/"native-libs",p/"build-evidence.json"); assert len(r["libs"])==14; assert r["libs"]["liblo-native-code.so"]["sha256"]=="b6487946ac838da0f3716341eb2c675c55c72375eea9950dd33c9fd6582bb6ee"; print("PINNED_P0C6_QUALIFIED=YES")')
+      - name: Fetch exact upstream LibreOfficeKit Java API
+        shell: bash
+        run: |
+          set -euo pipefail
+          UPSTREAM_SHA=f2820323446ae210668dcb6422ddcd55ce939dc2
+          DIR="$RUNNER_TEMP/formatlab-lo-p0g"
+          mkdir -p "$DIR"
+          git -C "$DIR" init -q
+          git -C "$DIR" remote add origin https://github.com/LibreOffice/core.git
+          git -C "$DIR" sparse-checkout init --cone
+          git -C "$DIR" sparse-checkout set android/Bootstrap/src/org/libreoffice/kit
+          git -C "$DIR" -c protocol.version=2 fetch --depth=1 --filter=blob:none origin "$UPSTREAM_SHA"
+          git -C "$DIR" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$DIR" rev-parse HEAD)" = "$UPSTREAM_SHA"
+      - name: Compose real ARM64 native FormatLab candidate from pinned v0.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '04694a0afbc26ebcbe7dd0c4c265d656acc05497d6d5765980c22e4366c0123b  FormatLab-Android-v0.3-offline-source.zip' | sha256sum -c -
+          python3 native/office/compose_native_office.py \
+            --source-zip FormatLab-Android-v0.3-offline-source.zip \
+            --upstream-tree "$RUNNER_TEMP/formatlab-lo-p0g" \
+            --java-overlay native/office/android/hu/formatlab/android \
+            --reference-apk "$RUNNER_TEMP/formatlab-p0c6/LibreOfficeViewer-strippedUI-debug.apk" \
+            --native-libs "$RUNNER_TEMP/formatlab-p0c6/native-libs" \
+            --evidence "$RUNNER_TEMP/formatlab-p0c6/build-evidence.json" \
+            --destination "$RUNNER_TEMP/formatlab-p0g-native-candidate"
+      - name: Compile integrated APK and enforce offline native static acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/formatlab-p0g-native-candidate"
+          python3 scripts/audit_public_source.py
+          python3 scripts/verify_android.py
+          python3 scripts/test_offline_surface.py
+          node scripts/test_js_bridge.js
+          node scripts/test_offline_algorithms.js
+          gradle --no-daemon :app:assembleDebug
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          python3 "$GITHUB_WORKSPACE/native/office/offline_apk_gate.py" \
+            "$APK" --aapt "$ANDROID_HOME/build-tools/35.0.0/aapt" \
+            --report "$RUNNER_TEMP/formatlab-p0g-real-apk-audit.json"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree "$APK" AndroidManifest.xml > "$RUNNER_TEMP/formatlab-p0g-real-manifest.txt"
+          grep -F 'FormatLabOfficeService' "$RUNNER_TEMP/formatlab-p0g-real-manifest.txt"
+          grep -F ':office' "$RUNNER_TEMP/formatlab-p0g-real-manifest.txt"
+          sha256sum "$APK" > "$RUNNER_TEMP/formatlab-p0g-native-candidate.sha256"
+          echo 'NATIVE_FORMATLAB_APK_STATIC_PASS=YES; DEVICE_TEST=NO; RELEASE=NO'
+      - name: Save provenance and audit only; withhold unaccepted APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FormatLab-P0g-native-static-evidence-NO-APK
+          path: |
+            ${{ runner.temp }}/formatlab-p0g-native-candidate/FORMATLAB_OFFICE_COMPOSE_EVIDENCE.json
+            ${{ runner.temp }}/formatlab-p0g-real-apk-audit.json
+            ${{ runner.temp }}/formatlab-p0g-native-candidate.sha256
+          retention-days: 5
+          if-no-files-found: error
+      - name: Explicit build-versus-runtime boundary
+        if: always()
+        run: |
+          {
+            echo '## Real P0c #6 -> FormatLab APK integration attempt'
+            echo 'This workflow never publishes a new APK or changes the working v0.3.'
+            echo 'Even an APK static PASS is not phone-based JNI or DOCX-to-PDF validation.'
+            echo 'DEVICE_TESTED=NO; DOCUMENT_FIDELITY=UNKNOWN; RELEASE_APPROVED=NO'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,7 @@ package hu.formatlab.android;
 // FormatLab offline LibreOfficeKit adapter (candidate, NOT wired into the user UI).
 // It requires the real pinned native engine AND its bootstrap/registry/fonts in APK.
 // Copyright (c) FormatLab contributors. No online fallback.
-import android.app.Activity;
+import android.content.Context;
 import android.content.res.AssetManager;
 import android.net.Uri;
 import android.os.Looper;
@@ -14,10 +14,10 @@ import org.libreoffice.kit.LibreOfficeKit;
 import org.libreoffice.kit.Office;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.util.Locale;
 import java.util.HashSet;
@@ -46,6 +46,7 @@ public final class FormatLabOfflineOfficeConverter {
     private static final Object NATIVE_LOCK = new Object();
     private static Office sharedOffice = null;
     private static final int MAX_ZIP_ENTRIES = 2048;
+    private static final long TEMP_RETENTION_MS = 24L * 60L * 60L * 1000L;
     private static final long MAX_DOC_XML_BYTES = 12L * 1024L * 1024L;
     private static final long MAX_TOTAL_UNCOMPRESSED = 200L * 1024L * 1024L;
     private static final String[] REQUIRED_NATIVE_LIBS = {
@@ -75,7 +76,7 @@ public final class FormatLabOfflineOfficeConverter {
     }
 
     /** All native dependencies and assets must be packaged before any JNI call. */
-    public static boolean isEnginePackaged(Activity activity) {
+    public static boolean isEnginePackaged(Context activity) {
         if (activity == null) return false;
         // Android may keep native libraries inside the APK instead of extracting
         // them into nativeLibraryDir. Inspect the actual installed base APK.
@@ -122,7 +123,7 @@ public final class FormatLabOfflineOfficeConverter {
      * The output remains in private cache until the caller explicitly saves/shares it.
      * This method must not run on the main thread.
      */
-    public static File convertDocxToPrivatePdf(Activity activity, Uri source)
+    public static File convertDocxToPrivatePdf(Context activity, Uri source)
             throws ConversionException {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             throw new ConversionException(Status.CONVERSION_FAILED,
@@ -144,6 +145,7 @@ public final class FormatLabOfflineOfficeConverter {
                 if (!workDir.isDirectory() && !workDir.mkdirs()) {
                     throw new IOException("Cannot allocate private office directory");
                 }
+                cleanupStaleTempFiles(workDir);
                 inputFile = File.createTempFile("office-in-", INPUT_EXTENSION, workDir);
                 outputFile = File.createTempFile("office-out-", OUTPUT_EXTENSION, workDir);
                 // Delete an empty placeholder: native saveAs creates the output itself.
@@ -185,7 +187,23 @@ public final class FormatLabOfflineOfficeConverter {
         }
     }
 
-    private static Office prepareNativeOffice(Activity activity) throws ConversionException {
+    /** Remove only old, known temporary files; never touch an active output. */
+    private static void cleanupStaleTempFiles(File workDir) {
+        File[] files = workDir.listFiles();
+        if (files == null) return;
+        long cutoff = System.currentTimeMillis() - TEMP_RETENTION_MS;
+        for (File candidate : files) {
+            String name = candidate.getName();
+            boolean knownInput = name.startsWith("office-in-") && name.endsWith(INPUT_EXTENSION);
+            boolean knownOutput = name.startsWith("office-out-") && name.endsWith(OUTPUT_EXTENSION);
+            if ((knownInput || knownOutput) && candidate.isFile()
+                    && candidate.lastModified() > 0 && candidate.lastModified() < cutoff) {
+                if (!candidate.delete()) Log.w(TAG, "Stale office cache cleanup failed");
+            }
+        }
+    }
+
+    private static Office prepareNativeOffice(Context activity) throws ConversionException {
         if (sharedOffice != null) return sharedOffice;
         try {
             LibreOfficeKit.init(activity);
@@ -202,7 +220,7 @@ public final class FormatLabOfflineOfficeConverter {
         }
     }
 
-    private static void copyBoundedDocx(Activity activity, Uri uri, File destination)
+    private static void copyBoundedDocx(Context activity, Uri uri, File destination)
             throws IOException {
         long count = 0;
         try (InputStream in = activity.getContentResolver().openInputStream(uri);
@@ -238,8 +256,11 @@ public final class FormatLabOfflineOfficeConverter {
                 ZipEntry entry = entries.nextElement();
                 String name = entry.getName();
                 if (++count > MAX_ZIP_ENTRIES || name == null || name.startsWith("/")
+                        || name.startsWith("./") || name.contains("//")
                         || name.contains("\\") || name.contains("../") || name.contains("/./")
-                        || name.equals("..") || name.endsWith("/..") || !seen.add(name)) {
+                        || name.equals(".") || name.equals("..") || name.endsWith("/.")
+                        || name.endsWith("/..") || name.indexOf((char) 0) >= 0
+                        || !seen.add(name)) {
                     throw new ConversionException(Status.BAD_INPUT,
                             "DOCX archive entries invalid");
                 }
@@ -279,18 +300,35 @@ public final class FormatLabOfflineOfficeConverter {
             throw new ConversionException(Status.OUTPUT_INVALID,
                     "PDF missing or outside size limits");
         }
-        try (FileInputStream in = new FileInputStream(file)) {
+        try (RandomAccessFile in = new RandomAccessFile(file, "r")) {
             byte[] header = new byte[5];
-            if (in.read(header) != 5
-                    || header[0] != '%' || header[1] != 'P' || header[2] != 'D'
+            in.readFully(header);
+            if (header[0] != '%' || header[1] != 'P' || header[2] != 'D'
                     || header[3] != 'F' || header[4] != '-') {
                 throw new ConversionException(Status.OUTPUT_INVALID, "Output is not a PDF");
+            }
+            // LibreOffice output must also have an EOF trailer, not only a magic header.
+            long tailStart = Math.max(0L, file.length() - 65536L);
+            in.seek(tailStart);
+            byte[] tail = new byte[(int) (file.length() - tailStart)];
+            in.readFully(tail);
+            boolean hasEof = false;
+            for (int i = tail.length - 5; i >= 0; i--) {
+                if (tail[i] == '%' && tail[i + 1] == '%' && tail[i + 2] == 'E'
+                        && tail[i + 3] == 'O' && tail[i + 4] == 'F') {
+                    hasEof = true;
+                    break;
+                }
+            }
+            if (!hasEof) {
+                throw new ConversionException(Status.OUTPUT_INVALID,
+                        "PDF end marker missing");
             }
         }
     }
 
     /** Caller is responsible for copying an accepted output through SAF and deleting it. */
-    public static void cleanupPrivateOutput(File file, Activity activity) {
+    public static void cleanupPrivateOutput(File file, Context activity) {
         if (file == null || activity == null) return;
         try {
             File canonicalRoot = new File(activity.getCacheDir(), "formatlab-office")

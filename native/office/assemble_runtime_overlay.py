@@ -5,7 +5,7 @@ No native lib present or runtime feature exposed in the generated candidate APK.
 No release publishing. Intended for CI compilation gate only.
 """
 from __future__ import annotations
-import argparse,hashlib,json,shutil,sys,zipfile
+import argparse,hashlib,json,re,shutil,sys,zipfile
 from pathlib import Path,PurePosixPath
 
 ORIGINAL_SHA256='04694a0afbc26ebcbe7dd0c4c265d656acc05497d6d5765980c22e4366c0123b'
@@ -16,6 +16,8 @@ PINNED_KIT=(
  'LibreOfficeKit.java','Office.java','Document.java','DirectBufferAllocator.java'
 )
 SOURCE_UPSTREAM='android/Bootstrap/src/org/libreoffice/kit'
+OVERLAY_JAVA=('FormatLabOfflineOfficeConverter.java','FormatLabOfficeService.java','FormatLabOfficeProcessClient.java')
+SERVICE_PROCESS=':office'
 MAX_ENTRIES=1000
 MAX_INPUT_UNCOMPRESSED=20*1024*1024
 MAX_FILE=5*1024*1024
@@ -42,7 +44,7 @@ def verify_archive(archive:Path,expected_sha:str=ORIGINAL_SHA256)->list[zipfile.
             for item in items:
                 name=item.filename
                 p=PurePosixPath(name)
-                if (not name.startswith(ROOT+'/') or name.startswith('/') or
+                if (name.rstrip('/') != str(p) or not name.startswith(ROOT+'/') or name.startswith('/') or
                     '\\' in name or '\x00' in name or
                     any(part=='..' for part in p.parts) or
                     len(set(p.parts))==0 or
@@ -96,22 +98,55 @@ def assemble(archive:Path,upstream:Path,overlay:Path,output:Path,
         copied=[]
         for name in PINNED_KIT:
             src=Path(upstream)/SOURCE_UPSTREAM/name
-            if not src.is_file() or 'package org.libreoffice.kit;' not in src.read_text(errors='replace'):
+            if src.is_symlink() or not src.is_file() or 'package org.libreoffice.kit;' not in src.read_text(errors='replace'):
                 raise GateError('UPSTREAM_KIT_SOURCE_MISSING:'+name)
-            shutil.copyfile(src,api_dest/name)
+            content=src.read_text(encoding='utf-8')
+            if name=='LibreOfficeKit.java':
+                # Upstream init only uses Context-compatible methods; keep all
+                # other pinned JNI declarations byte-for-byte unchanged.
+                required=('import android.app.Activity;',
+                          'init(Activity activity)',
+                          'activity.getApplication().getCacheDir()',
+                          'activity.getApplication().getPackageResourcePath()')
+                if any(x not in content for x in required):
+                    raise GateError('UPSTREAM_CONTEXT_ADAPTER_PATTERN_CHANGED')
+                content=content.replace('import android.app.Activity;',
+                                        'import android.content.Context;')
+                content=content.replace('init(Activity activity)',
+                                        'init(Context activity)')
+                content=content.replace('activity.getApplication().getCacheDir()',
+                                        'activity.getApplicationContext().getCacheDir()')
+                content=content.replace('activity.getApplication().getPackageResourcePath()',
+                                        'activity.getPackageResourcePath()')
+                (api_dest/name).write_text(content,encoding='utf-8')
+            else:
+                shutil.copyfile(src,api_dest/name)
             copied.append({'path':str((api_dest/name).relative_to(output)),
                            'sha256':sha256(api_dest/name)})
-        src=Path(overlay)/'FormatLabOfflineOfficeConverter.java'
-        if not src.is_file() or 'package hu.formatlab.android;' not in src.read_text(errors='replace'):
-            raise GateError('OVERLAY_SOURCE_MISSING')
-        target=appjava/src.name
-        if target.exists():raise GateError('ANDROID_OVERLAY_ALREADY_EXISTS')
-        shutil.copyfile(src,target)
-        copied.append({'path':str(target.relative_to(output)),'sha256':sha256(target)})
+        for name in OVERLAY_JAVA:
+            src=Path(overlay)/name
+            if src.is_symlink() or not src.is_file() or 'package hu.formatlab.android;' not in src.read_text(errors='replace'):
+                raise GateError('OVERLAY_SOURCE_MISSING:'+name)
+            target=appjava/name
+            if target.exists():raise GateError('ANDROID_OVERLAY_ALREADY_EXISTS')
+            shutil.copyfile(src,target)
+            copied.append({'path':str(target.relative_to(output)),'sha256':sha256(target)})
+        # Non-exported separate-process service, never callable from other apps.
+        # Preserve original manifest bytes other than a single inserted service.
+        service_element=('        <service android:name="hu.formatlab.android.FormatLabOfficeService"'
+                         ' android:process=":office" android:exported="false" />\n')
+        if data.count('</application>')!=1 or 'xmlns:android=' not in data:
+            raise GateError('ANDROID_APPLICATION_MANIFEST_UNEXPECTED')
+        if 'FormatLabOfficeService' in data:
+            raise GateError('OFFICE_SERVICE_ALREADY_REGISTERED')
+        data=data.replace('</application>',service_element+'</application>')
+        manifest.write_text(data,encoding='utf-8')
         result={'status':'SOURCE_OVERLAY_ASSEMBLED','source_sha256':sha256(archive),
                 'upstream_kit_version':'f2820323446ae210668dcb6422ddcd55ce939dc2',
                 'sources':copied,'native_lib_bundled':False,
-                'document_conversion_runtime_tested':False,'feature_exposed_in_ui':False}
+                'document_conversion_runtime_tested':False,'feature_exposed_in_ui':False,
+                'separate_process_service_declared':True,'native_timeout_watchdog_seconds':180,
+                'upstream_context_adapter_pinned':True}
         (output/'FORMATLAB_OFFICE_OVERLAY_EVIDENCE.json').write_text(
             json.dumps(result,indent=2)+'\n',encoding='utf-8')
         return result
