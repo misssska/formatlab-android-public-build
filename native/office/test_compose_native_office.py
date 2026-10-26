@@ -20,7 +20,9 @@ def elf_with_build_id(build_id:bytes, marker:bytes)->bytes:
     header[32:40]=(64).to_bytes(8,'little')
     header[54:56]=(56).to_bytes(2,'little')
     header[56:58]=(1).to_bytes(2,'little')
-    note=(4).to_bytes(4,'little')+len(build_id).to_bytes(4,'little')+(3).to_bytes(4,'little')+b'GNU\x00'+build_id
+    android_note=(8).to_bytes(4,'little')+(132).to_bytes(4,'little')+(1).to_bytes(4,'little')+b'Android\x00'+bytes(132)
+    gnu_note=(4).to_bytes(4,'little')+len(build_id).to_bytes(4,'little')+(3).to_bytes(4,'little')+b'GNU\x00'+build_id
+    note=android_note+gnu_note
     ph=bytearray(56)
     ph[0:4]=(4).to_bytes(4,'little')
     ph[8:16]=(120).to_bytes(8,'little')
