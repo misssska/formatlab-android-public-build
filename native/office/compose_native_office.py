@@ -25,6 +25,50 @@ def hash_file(path:Path)->str:
         for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
     return h.hexdigest()
 
+def elf_gnu_build_id(stream)->str|None:
+    """Read the linker GNU build-id from a little-endian ELF64 PT_NOTE segment.
+
+    A stripped Android APK library may differ byte-for-byte from the unstripped
+    library in P0c's native-libs directory; matching build IDs are evidence
+    that the linker produced the same object. Fail closed if notes are absent.
+    """
+    stream.seek(0)
+    header=stream.read(64)
+    if not elf_arm64_header(header):
+        return None
+    phoff=int.from_bytes(header[32:40],'little')
+    phsize=int.from_bytes(header[54:56],'little')
+    phnum=int.from_bytes(header[56:58],'little')
+    if phoff<64 or phoff>1024*1024 or phsize<56 or phsize>256 or phnum>256:
+        return None
+    for i in range(phnum):
+        stream.seek(phoff+i*phsize)
+        ph=stream.read(phsize)
+        if len(ph)!=phsize or int.from_bytes(ph[0:4],'little')!=4:
+            continue
+        noteoff=int.from_bytes(ph[8:16],'little')
+        notesize=int.from_bytes(ph[32:40],'little')
+        if noteoff<64 or notesize>1024*1024 or notesize<16:
+            continue
+        stream.seek(noteoff)
+        blob=stream.read(notesize)
+        p=0
+        while p+12<=len(blob):
+            namelen=int.from_bytes(blob[p:p+4],'little')
+            datalen=int.from_bytes(blob[p+4:p+8],'little')
+            note_type=int.from_bytes(blob[p+8:p+12],'little')
+            p+=12
+            name_end=p+namelen
+            data_start=p+((namelen+3)//4)*4
+            data_end=data_start+datalen
+            next_note=data_start+((datalen+3)//4)*4
+            if namelen>128 or datalen>128 or next_note>len(blob):
+                break
+            if blob[p:name_end]==b'GNU\x00' and note_type==3 and datalen>=16:
+                return blob[data_start:data_end].hex()
+            p=next_note
+    return None
+
 def verified_upstream(reference_apk:Path)->dict:
     reference_apk=Path(reference_apk)
     if not reference_apk.is_file() or reference_apk.is_symlink():
@@ -86,11 +130,23 @@ def qualify_bundle(reference_apk:Path,libs:Path,evidence:Path)->dict:
                 reference_hash=hashlib.sha256()
                 for part in iter(lambda:source.read(1024*1024),b''):
                     reference_hash.update(part)
-            if checksum!=reference_hash.hexdigest():
-                raise GateError('NATIVE_REFERENCE_MISMATCH:'+lib_name)
+            reference_sha=reference_hash.hexdigest()
+            comparison='EXACT_SHA256'
+            if checksum!=reference_sha:
+                # Gradle may strip symbols when making the reference APK.
+                # Do not accept a different native library just because it is ELF.
+                with native.open('rb') as raw, z.open(path) as packaged:
+                    raw_id=elf_gnu_build_id(raw)
+                    packaged_id=elf_gnu_build_id(packaged)
+                if not raw_id or raw_id!=packaged_id:
+                    raise GateError('NATIVE_REFERENCE_MISMATCH:'+lib_name)
+                comparison='MATCHING_GNU_BUILD_ID_AFTER_STRIP'
             if lib_name=='liblo-native-code.so' and checksum!=record['engine']['sha256']:
                 raise GateError('ENGINE_SHA256_MISMATCH')
-            report_libs[lib_name]={'bytes':native.stat().st_size,'sha256':checksum}
+            report_libs[lib_name]={'bytes':native.stat().st_size,
+                                   'sha256':checksum,
+                                   'reference_apk_sha256':reference_sha,
+                                   'comparison':comparison}
     ref['libs']=report_libs
     ref['pinned_libreoffice_source']=SOURCE_SHA
     return ref
