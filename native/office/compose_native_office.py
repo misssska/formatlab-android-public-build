@@ -62,7 +62,7 @@ def elf_gnu_build_id(stream)->str|None:
             data_start=p+((namelen+3)//4)*4
             data_end=data_start+datalen
             next_note=data_start+((datalen+3)//4)*4
-            if namelen>128 or datalen>128 or next_note>len(blob):
+            if namelen>128 or datalen>4096 or next_note>len(blob):
                 break
             if blob[p:name_end]==b'GNU\x00' and note_type==3 and datalen>=16:
                 return blob[data_start:data_end].hex()
