@@ -1,15 +1,31 @@
 """P0g assembly contract tests: synthetic references only, no actual Office build."""
 from __future__ import annotations
-import hashlib,json,tempfile,unittest,zipfile
+import hashlib,io,json,tempfile,unittest,zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from compose_native_office import (compose,qualify_bundle,verified_upstream,
+from compose_native_office import (compose,qualify_bundle,verified_upstream,elf_gnu_build_id,
                                    SOURCE_SHA,REQUIRED_ASSETS,REQUIRED_LICENSES)
 from offline_apk_gate import REQUIRED_NATIVE_LIBS
 from assemble_runtime_overlay import ROOT,PINNED_KIT,SOURCE_UPSTREAM,GateError
 
 ELF=b'\x7fELF\x02\x01'+bytes(10)+(3).to_bytes(2,'little')+(183).to_bytes(2,'little')+bytes(44)
+
+def elf_with_build_id(build_id:bytes, marker:bytes)->bytes:
+    """ELF64 ARM PT_NOTE fixture with stable linker identity but different body."""
+    header=bytearray(64)
+    header[:6]=b'\x7fELF\x02\x01'
+    header[16:18]=(3).to_bytes(2,'little')
+    header[18:20]=(183).to_bytes(2,'little')
+    header[32:40]=(64).to_bytes(8,'little')
+    header[54:56]=(56).to_bytes(2,'little')
+    header[56:58]=(1).to_bytes(2,'little')
+    note=(4).to_bytes(4,'little')+len(build_id).to_bytes(4,'little')+(3).to_bytes(4,'little')+b'GNU\x00'+build_id
+    ph=bytearray(56)
+    ph[0:4]=(4).to_bytes(4,'little')
+    ph[8:16]=(120).to_bytes(8,'little')
+    ph[32:40]=len(note).to_bytes(8,'little')
+    return bytes(header+ph)+note+marker*8192
 
 class NativePackageComposerTests(unittest.TestCase):
     def setUp(self):
@@ -79,6 +95,28 @@ class NativePackageComposerTests(unittest.TestCase):
         self.assertEqual(r['verified_library_count'],len(REQUIRED_NATIVE_LIBS))
         self.assertIn('hu.formatlab.android/fontconfig',
                       (self.destination/'app/src/main/assets/unpack/etc/fonts/fonts.conf').read_text())
+
+    def test_matching_build_id_accepts_stripped_native_pair(self):
+        name='lib/arm64-v8a/libnss3.so'
+        ident=bytes(range(20))
+        staged=elf_with_build_id(ident,b'X')
+        packaged=elf_with_build_id(ident,b'Y')
+        self.assertNotEqual(hashlib.sha256(staged).digest(),hashlib.sha256(packaged).digest())
+        self.assertEqual(elf_gnu_build_id(io.BytesIO(staged)), ident.hex())
+        self.native[name]=packaged
+        (self.libs/'libnss3.so').write_bytes(staged)
+        self.write_apk()
+        qualified=qualify_bundle(self.apk,self.libs,self.evidence)
+        self.assertEqual(qualified['libs']['libnss3.so']['comparison'],
+                         'MATCHING_GNU_BUILD_ID_AFTER_STRIP')
+
+    def test_mismatching_build_id_blocks_stripped_native_pair(self):
+        name='lib/arm64-v8a/libnss3.so'
+        self.native[name]=elf_with_build_id(bytes(range(20)),b'Y')
+        (self.libs/'libnss3.so').write_bytes(elf_with_build_id(bytes(reversed(range(20))),b'X'))
+        self.write_apk()
+        with self.assertRaisesRegex(GateError,'NATIVE_REFERENCE_MISMATCH:libnss3.so'):
+            qualify_bundle(self.apk,self.libs,self.evidence)
 
     def test_library_mismatch_blocks(self):
         (self.libs/'libnss3.so').write_bytes(ELF+bytes(8192)+b'altered')
